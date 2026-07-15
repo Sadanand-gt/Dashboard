@@ -1,0 +1,66 @@
+"""
+core/reports_catalog.py — the canonical list of dashboard reports.
+
+Used for per-user report visibility control:
+  * /auth/reports returns this catalog to the admin UI (checkbox list).
+  * user_reports rows whitelist keys per user (no rows = all allowed).
+  * The API gate maps request paths to a report key via PATH_REPORT_MAP
+    and rejects calls to reports outside the user's whitelist.
+
+Keys deliberately match the frontend route slugs.
+"""
+
+REPORT_CATALOG: list[dict] = [
+    {"key": "exec_summary",    "label": "Executive Summary",   "path": "/dashboard"},
+    {"key": "aum",             "label": "Current Outstanding", "path": "/dashboard/aum"},
+    {"key": "aum_live",        "label": "AUM — DPD Detail",    "path": "/dashboard/aum-live"},
+    {"key": "ageing",          "label": "Ageing Analysis",     "path": "/dashboard/ageing"},
+    {"key": "od_status",       "label": "OD Status",           "path": "/dashboard/od-status"},
+    {"key": "od_slippage",     "label": "OD Slippage",         "path": "/dashboard/od-slippage"},
+    {"key": "dq_category",     "label": "DQ Category",         "path": "/dashboard/dq-category"},
+    {"key": "daily",           "label": "T-1 Collection",      "path": "/dashboard/daily"},
+    {"key": "mtd",             "label": "MTD Collection",      "path": "/dashboard/mtd"},
+    {"key": "cashless",        "label": "Cashless Collection", "path": "/dashboard/cashless"},
+    {"key": "disbursement",    "label": "Disbursement",        "path": "/dashboard/disbursement"},
+    {"key": "pos_par",         "label": "POS & PAR",           "path": "/dashboard/pos-par"},
+    {"key": "delinquencies",   "label": "Delinquencies",       "path": "/dashboard/delinquencies"},
+    {"key": "bucket_movement", "label": "Bucket Movement",     "path": "/dashboard/bucket-movement"},
+    {"key": "case_movement",   "label": "Case Movement",       "path": "/dashboard/case-movement"},
+    {"key": "writeoff",        "label": "Write-Off",           "path": "/dashboard/writeoff"},
+    {"key": "trend",           "label": "Monthly Trend",       "path": "/dashboard/trend"},
+]
+
+REPORT_KEYS = [r["key"] for r in REPORT_CATALOG]
+
+# API path prefix → report key(s) that grant access to it.
+# Longest prefix wins. Prefixes not listed (auth, filters, health) are open
+# to any authenticated user. Endpoints shared by several pages list every
+# report that legitimately calls them.
+PATH_REPORT_MAP: list[tuple[str, set]] = [
+    ("/api/od-slippage",     {"od_slippage"}),
+    ("/api/od-status",       {"od_status"}),
+    ("/api/dq-category",     {"dq_category"}),
+    ("/api/aum-live",        {"aum_live"}),
+    ("/api/ageing",          {"ageing"}),
+    ("/api/bucket-movement", {"bucket_movement"}),
+    ("/api/case-movement",   {"case_movement"}),
+    ("/api/delinquencies",   {"delinquencies"}),
+    ("/api/cashless",        {"cashless"}),
+    ("/api/trend-monthly",   {"trend"}),
+    ("/api/pos-par",         {"pos_par"}),
+    ("/api/writeoff",        {"writeoff"}),
+    ("/api/disbursement",    {"disbursement"}),
+    # collection endpoints serve the T-1, MTD and Cashless pages
+    ("/api/collection",      {"daily", "mtd", "cashless"}),
+    # aum endpoints serve Exec Summary, Current Outstanding and Monthly Trend
+    ("/api/aum",             {"exec_summary", "aum", "trend"}),
+]
+
+
+def report_for_path(path: str):
+    """Return the set of report keys that grant access to an API path,
+    or None if the path is not report-gated."""
+    for prefix, keys in PATH_REPORT_MAP:
+        if path.startswith(prefix):
+            return keys
+    return None
