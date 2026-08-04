@@ -89,20 +89,39 @@ def run_sql_file(filename: str, params: dict = None, subs: dict = None,
             last_error = e
             err_str = str(e).lower()
 
-            if "conflict with recovery" in err_str or "40001" in err_str:
+            # Transient, worth-retrying failures on the read replica: recovery
+            # conflicts AND dropped connections. The heavy trend query gets its
+            # connection cancelled under load ("SSL connection has been closed
+            # unexpectedly") — a hard OperationalError that used to fail the whole
+            # run with no retry. On these we must also dispose the pool, since the
+            # dead connection would otherwise be handed back on the next attempt.
+            retryable = (
+                "conflict with recovery" in err_str
+                or "40001" in err_str
+                or "ssl connection has been closed" in err_str
+                or "server closed the connection" in err_str
+                or "connection has been closed" in err_str
+                or "could not receive data from server" in err_str
+                or "terminating connection" in err_str
+            )
+            if retryable:
                 if attempt < max_retries:
                     log.warning(
-                        f"    Replica conflict on attempt {attempt}. "
-                        f"Retrying in {retry_delay}s ..."
+                        f"    Transient DB error on attempt {attempt} "
+                        f"({str(e).splitlines()[0][:70]}). Retrying in {retry_delay}s ..."
                     )
+                    try:
+                        engine.dispose()          # drop the stale/dead connection
+                    except Exception:
+                        pass
                     time.sleep(retry_delay)
                     continue
                 else:
                     log.error(
-                        f"    Replica conflict persists after {max_retries} attempts."
+                        f"    Transient DB error persists after {max_retries} attempts."
                     )
             else:
-                raise  # non-replica error — fail immediately
+                raise  # non-transient error — fail immediately
 
     raise RuntimeError(
         f"Query failed after {max_retries} attempts: {last_error}"

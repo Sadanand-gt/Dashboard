@@ -2,8 +2,8 @@
 WITH
 ref AS (
     SELECT
-        (date_trunc('month', current_date) - interval '1 day')::date AS prev_month_end,
-        date_trunc('month', current_date)::date                       AS curr_month_start
+        (date_trunc('month', current_date - 1) - interval '1 day')::date AS prev_month_end,
+        date_trunc('month', current_date - 1)::date                       AS curr_month_start
 ),
 hierarchy AS (
     SELECT bm.branch_id, bm.branch_name, a.area_name,

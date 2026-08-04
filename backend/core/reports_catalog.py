@@ -28,6 +28,8 @@ REPORT_CATALOG: list[dict] = [
     {"key": "case_movement",   "label": "Case Movement",       "path": "/dashboard/case-movement"},
     {"key": "writeoff",        "label": "Write-Off",           "path": "/dashboard/writeoff"},
     {"key": "trend",           "label": "Monthly Trend",       "path": "/dashboard/trend"},
+    {"key": "aml",             "label": "AML Risk Category",   "path": "/dashboard/aml"},
+    {"key": "ots",             "label": "OTS & Recovery",      "path": "/dashboard/ots"},
 ]
 
 REPORT_KEYS = [r["key"] for r in REPORT_CATALOG]
@@ -47,6 +49,12 @@ PATH_REPORT_MAP: list[tuple[str, set]] = [
     ("/api/delinquencies",   {"delinquencies"}),
     ("/api/cashless",        {"cashless"}),
     ("/api/trend-monthly",   {"trend"}),
+    # trend sections are embedded on their host pages — any host report grants
+    ("/api/trend/",          {"aum", "disbursement", "mtd", "od_slippage",
+                              "bucket_movement", "writeoff", "delinquencies",
+                              "trend", "exec_summary"}),
+    ("/api/aml",             {"aml"}),
+    ("/api/ots",             {"ots"}),
     ("/api/pos-par",         {"pos_par"}),
     ("/api/writeoff",        {"writeoff"}),
     ("/api/disbursement",    {"disbursement"}),

@@ -24,10 +24,19 @@
 
 WITH
 
+-- Write-off MASTER (loan_id, wo_date). Overrides a loan's STATUS to 'W' when the
+-- master applies (loan existed at write-off). Universe is unchanged — only the
+-- displayed status changes, so the Excl-W/O view (loan_status <> 'Write-off')
+-- matches Excel + Current Outstanding. PAR / movement math is untouched.
+wo_master AS (
+    SELECT v.loan_id::bigint AS loan_id, v.wo_date::date AS wo_date
+    FROM (VALUES {wo_pairs}) AS v(loan_id, wo_date)
+),
+
 ref AS (
     SELECT
-        (date_trunc('month', current_date) - interval '1 day')::date AS prev_month_end,
-        date_trunc('month', current_date)::date                       AS curr_month_start,
+        (date_trunc('month', current_date - 1) - interval '1 day')::date AS prev_month_end,
+        date_trunc('month', current_date - 1)::date                       AS curr_month_start,
         (current_date - interval '1 day')::date                       AS yesterday
 ),
 
@@ -80,11 +89,14 @@ il_ars AS (
     LEFT JOIN il_rd_eom rd ON rd.loan_id = rs.loan_id
     WHERE (
         (la.status = 'W' AND la.closure_date > DATE '2025-03-30')
-        OR (la.closure_type = 'W' AND la.last_collection_date > (SELECT prev_month_end FROM ref))
+        -- ::date on the anchor compares: IL closure/collection dates are TIMESTAMPs
+        -- with a real time-of-day, prev_month_end is a DATE. Uncast, a loan closed at
+        -- 17:14 ON the month-end is wrongly held open. (JLG is always 00:00:00.)
+        OR (la.closure_type = 'W' AND la.last_collection_date::date > (SELECT prev_month_end FROM ref))
         OR la.status IN ('D', 'I')
         OR (
-            (la.closure_date IS NULL OR la.closure_date > (SELECT prev_month_end FROM ref))
-            AND rs.demand_date <= (SELECT prev_month_end FROM ref)
+            (la.closure_date IS NULL OR la.closure_date::date > (SELECT prev_month_end FROM ref))
+            AND rs.demand_date::date <= (SELECT prev_month_end FROM ref)
         )
     )
     GROUP BY rs.loan_id, rs.demand_date, rs.cumulative_principal_due, rs.cumulative_interest_due
@@ -147,9 +159,10 @@ jlg_ars AS (
     LEFT JOIN jlg_rd_eom rd ON rd.loan_id = rs.loan_id
     WHERE (
         (la.status = 'W' AND la.closure_date > DATE '2025-03-30')
-        OR (la.closure_type = 'W' AND la.last_collection_date > (SELECT prev_month_end FROM ref))
+        -- ::date on the anchor compares — see the IL block above.
+        OR (la.closure_type = 'W' AND la.last_collection_date::date > (SELECT prev_month_end FROM ref))
         OR la.status IN ('D', 'I')
-        OR (la.closure_date IS NULL OR la.closure_date > (SELECT prev_month_end FROM ref))
+        OR (la.closure_date IS NULL OR la.closure_date::date > (SELECT prev_month_end FROM ref))
     )
     GROUP BY rs.loan_id, rs.demand_date, rs.cumulative_principal_due, rs.cumulative_interest_due
 ),
@@ -232,7 +245,9 @@ il_loans AS (
         la.principal_outstanding                                          AS pos,
         coalesce(la.dpd, 0)                                               AS current_dpd,
         coalesce(d.dpd_eom, 0)                                            AS prev_month_dpd,
-        la.status,
+        CASE WHEN la.status = 'W' OR (w.loan_id IS NOT NULL
+                  AND (w.wo_date IS NULL OR la.disbursement_date::date <= w.wo_date))
+             THEN 'W' ELSE la.status END                                  AS status,
         CASE WHEN la.status = 'D' THEN 1 ELSE 0 END                      AS is_death,
         -- PAR flags (live DPD)
         CASE WHEN coalesce(la.dpd,0) > 0  THEN 1 ELSE 0 END              AS is_par0,
@@ -248,6 +263,7 @@ il_loans AS (
         CASE WHEN dy.loan_id IS NOT NULL
               AND cy.loan_id IS NULL                      THEN 1 ELSE 0 END  AS no_pay_yesterday
     FROM public.loan_account_il la
+    LEFT JOIN wo_master w            ON w.loan_id  = la.loan_id
     LEFT JOIN il_dpd_eom d           ON d.loan_id  = la.loan_id
     LEFT JOIN il_coll_this_month cm  ON cm.loan_id = la.loan_id
     LEFT JOIN il_demand_yesterday dy ON dy.loan_id = la.loan_id
@@ -267,7 +283,9 @@ jlg_loans AS (
         la.prin_os                                                        AS pos,
         coalesce(la.dpd, 0)                                               AS current_dpd,
         coalesce(d.dpd_eom, 0)                                            AS prev_month_dpd,
-        la.status,
+        CASE WHEN la.status = 'W' OR (w.loan_id IS NOT NULL
+                  AND (w.wo_date IS NULL OR la.disbursement_date::date <= w.wo_date))
+             THEN 'W' ELSE la.status END                                  AS status,
         CASE WHEN la.status = 'D' THEN 1 ELSE 0 END                      AS is_death,
         CASE WHEN coalesce(la.dpd,0) > 0  THEN 1 ELSE 0 END              AS is_par0,
         CASE WHEN coalesce(la.dpd,0) > 30 THEN 1 ELSE 0 END              AS is_par30,
@@ -280,11 +298,13 @@ jlg_loans AS (
               AND cy.loan_id IS NULL                      THEN 1 ELSE 0 END  AS no_pay_yesterday
     FROM public.home_loan_account la
     JOIN public.home_center_master cm_br ON cm_br.center_id = la.center_id
+    LEFT JOIN wo_master w                 ON w.loan_id   = la.loan_id
     LEFT JOIN jlg_dpd_eom d               ON d.loan_id   = la.loan_id
     LEFT JOIN jlg_coll_this_month cm2     ON cm2.loan_id = la.loan_id
     LEFT JOIN jlg_demand_yesterday dy     ON dy.loan_id  = la.loan_id
     LEFT JOIN jlg_coll_yesterday cy       ON cy.loan_id  = la.loan_id
     WHERE la.status IN ('A', 'D', 'I', 'W')
+      AND la.loan_id >= 10000000                 -- drop junk/test ids (e.g. 1111111)
       AND (la.status != 'W' OR la.prin_os > 0)
       AND NOT EXISTS (
           SELECT 1 FROM public.loan_account_il il
@@ -305,7 +325,14 @@ all_loans AS (
 -- =========================================================
 SELECT
     al.loan_source,
-    al.status                                                              AS loan_status,
+    -- Canonical labels (match rpt_aum_status + the loan_status slicer options).
+    CASE al.status
+        WHEN 'A' THEN 'Active'
+        WHEN 'W' THEN 'Write-off'
+        WHEN 'D' THEN 'Death'
+        WHEN 'I' THEN 'Death'
+        ELSE al.status
+    END                                                                    AS loan_status,
     coalesce(h.cluster_name, 'Unassigned') AS cluster_name,
     coalesce(h.region_name,  'Unassigned') AS region_name,
     coalesce(h.area_name,    'Unassigned') AS area_name,

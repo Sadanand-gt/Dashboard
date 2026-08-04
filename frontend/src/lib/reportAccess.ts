@@ -19,6 +19,8 @@ export const PATH_REPORT_KEY: Record<string, string> = {
   '/dashboard/case-movement':   'case_movement',
   '/dashboard/writeoff':        'writeoff',
   '/dashboard/trend':           'trend',
+  '/dashboard/aml':             'aml',
+  '/dashboard/ots':             'ots',
 }
 
 /** Can this user see the report behind a route path?

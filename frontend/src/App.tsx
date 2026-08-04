@@ -19,11 +19,10 @@ import { Delinquencies } from './pages/Delinquencies'
 import { CaseMovement } from './pages/CaseMovement'
 import { Cashless } from './pages/Cashless'
 import { TrendMonthly } from './pages/TrendMonthly'
+import { AmlRiskCategory } from './pages/AmlRiskCategory'
+import { Ots } from './pages/Ots'
 import { UserManagement } from './pages/admin/UserManagement'
 import { Summary } from './pages/Summary'
-
-const ANALYST_ROLES = ['admin', 'manager', 'analyst'] as const
-type Role = typeof ANALYST_ROLES[number] | 'branch_user'
 
 export default function App() {
   const { isAuthenticated } = useAuthStore()
@@ -36,19 +35,14 @@ export default function App() {
         element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <Login />}
       />
 
-      {/* All authenticated users */}
+      {/* All authenticated users — page access is governed per user by the
+          report whitelist (AppShell's canSeePath guard), NOT by role. */}
       <Route element={<PrivateRoute />}>
         <Route element={<AppShell />}>
           <Route path="/dashboard" element={<Summary />} />
           <Route path="/dashboard/aum" element={<AumStatus />} />
           <Route path="/dashboard/daily" element={<DailyCollection />} />
           <Route path="/dashboard/mtd" element={<MtdCollection />} />
-        </Route>
-      </Route>
-
-      {/* Analyst and above */}
-      <Route element={<PrivateRoute allowedRoles={['admin', 'manager', 'analyst']} />}>
-        <Route element={<AppShell />}>
           <Route path="/dashboard/disbursement" element={<Disbursement />} />
           <Route path="/dashboard/ageing" element={<Ageing />} />
           <Route path="/dashboard/od-status" element={<OdStatus />} />
@@ -62,6 +56,8 @@ export default function App() {
           <Route path="/dashboard/case-movement" element={<CaseMovement />} />
           <Route path="/dashboard/cashless" element={<Cashless />} />
           <Route path="/dashboard/trend" element={<TrendMonthly />} />
+          <Route path="/dashboard/aml" element={<AmlRiskCategory />} />
+          <Route path="/dashboard/ots" element={<Ots />} />
         </Route>
       </Route>
 

@@ -40,6 +40,9 @@ def _opts(df: pd.DataFrame, col: str) -> list[str]:
         .tolist()
     )
     vals = [v for v in vals if v not in ("Unassigned", "N/A", "nan")]
+    # Numeric slicers (Cycle) must sort 1,2,…,10 — not lexicographically 1,10,11,2
+    if vals and all(v.replace(".", "", 1).isdigit() for v in vals):
+        return sorted(vals, key=float)
     return sorted(vals)
 
 
@@ -58,6 +61,8 @@ SLICER_GROUPS = [
         ("branch",          "Branch",                "branch_name"),
         ("branch_state",    "Branch State",          "state_id"),
         ("district",        "District",              "district_id"),
+        # Options are "<lo_id> - <NAME>"; the backend matches on the lo_id prefix.
+        ("lo",              "LO Name (with ID)",     "lo_name"),
     ]),
     ("Risk / Overdue", [
         # OD Status (Regular / Overdue / NPA / Write-off) is DEACTIVATED for now —
@@ -96,6 +101,9 @@ SLICER_ORDER = {
 SLICER_EXCLUDE = {
     "od_bucket":    {"Write-Off"},
     "od_movement":  {"Write-Off"},   # Write-Off shown in loan_status slicer
+    # 'Closed' = movement-only loans (closed this month) carried on rpt_aum_status
+    # solely for OD Status / Bucket Movement — not a live-book status, hide it.
+    "loan_status":  {"Closed"},
 }
 
 

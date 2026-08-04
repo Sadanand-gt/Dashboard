@@ -20,7 +20,7 @@ def _hash(password: str) -> str:
 def _verify(password: str, hashed: str) -> bool:
     return bcrypt.checkpw(password.encode(), hashed.encode())
 
-ROLES = ["admin", "manager", "analyst", "branch_user"]
+ROLES = ["admin", "manager", "officer", "branch_user"]
 
 
 def _create_token(user_id: int) -> str:
@@ -75,8 +75,8 @@ def _row_to_user(row: dict) -> UserOut:
 def login(req: LoginRequest):
     with users_conn() as conn:
         row = conn.execute(
-            "SELECT * FROM users WHERE username=? AND is_active=1",
-            (req.username,),
+            "SELECT * FROM users WHERE username=? COLLATE NOCASE AND is_active=1",
+            (req.username.strip(),),
         ).fetchone()
 
     if not row or not _verify(req.password, row["password_hash"]):

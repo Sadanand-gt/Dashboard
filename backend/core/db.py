@@ -32,8 +32,16 @@ def _get_pg_engine():
         _pg_engine = create_engine(
             url,
             connect_args={"options": f"-c search_path={REPORT_PG_SCHEMA}"
-                                     " -c statement_timeout=120000"},
+                                     " -c statement_timeout=120000",
+                          # TCP keepalives so an idle connection is kept warm and a
+                          # dropped one surfaces fast instead of hanging on read.
+                          "keepalives": 1, "keepalives_idle": 30,
+                          "keepalives_interval": 10, "keepalives_count": 5},
+            # pre_ping checks a pooled connection on checkout (recycles if dead);
+            # pool_recycle retires it proactively before the RDS/NAT idle timeout
+            # drops it (the "SSL SYSCALL error: connection reset by peer" class).
             pool_pre_ping=True,
+            pool_recycle=280,
             pool_size=5,
             max_overflow=5,
         )
@@ -103,6 +111,50 @@ def read_report(table: str) -> pd.DataFrame:
     return df
 
 
+def report_days(table: str) -> list[str]:
+    """Every report_day stored for a table, oldest first.
+
+    The day-stamped tables ARE the history, so this exposes which daily
+    snapshots exist (used to find true month-end snapshots for the trend).
+    Returns [] outside Postgres mode or when the table has no day column.
+    """
+    if not (_use_postgres() and _has_day_col(table)):
+        return []
+    try:
+        with reports_conn() as conn:
+            df = pd.read_sql(
+                f"SELECT DISTINCT {_DAY_COL} FROM {table} ORDER BY {_DAY_COL}", conn)
+        return [str(d) for d in pd.to_datetime(df[_DAY_COL]).dt.date]
+    except Exception:
+        return []
+
+
+def read_report_at_days(table: str, days: list[str]) -> pd.DataFrame:
+    """Read specific daily snapshots of a report table, scoped like read_report.
+
+    Unlike read_report (which returns only the latest day) this keeps report_day
+    so the caller can tell the snapshots apart.
+    """
+    if not days or not (_use_postgres() and _has_day_col(table)):
+        return pd.DataFrame()
+    placeholders = ", ".join(f"'{d}'" for d in days if str(d).replace("-", "").isdigit())
+    if not placeholders:
+        return pd.DataFrame()
+    try:
+        with reports_conn() as conn:
+            df = pd.read_sql(
+                f"SELECT * FROM {table} WHERE {_DAY_COL} IN ({placeholders})", conn)
+    except Exception:
+        return pd.DataFrame()
+
+    from .request_ctx import current_user
+    user = current_user.get()
+    if user is not None:
+        from .scope import scope_df
+        df = scope_df(df, user)
+    return df
+
+
 def init_users_db() -> None:
     with users_conn() as conn:
         conn.execute("""
@@ -129,6 +181,8 @@ def init_users_db() -> None:
             conn.execute("ALTER TABLE users ADD COLUMN scope_level TEXT")
         if "scope_value" not in existing:
             conn.execute("ALTER TABLE users ADD COLUMN scope_value TEXT")
+        # Role rename: 'analyst' → 'officer' (2026-07)
+        conn.execute("UPDATE users SET role='officer' WHERE role='analyst'")
         # Report visibility whitelist: no rows for a user = all reports allowed.
         conn.execute("""
             CREATE TABLE IF NOT EXISTS user_reports (

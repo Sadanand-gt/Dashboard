@@ -23,8 +23,8 @@ import {
 } from './collectionShared'
 
 export function DailyCollection() {
-  const [ap1, setAp1] = useState('area_name')          // Excel default AP#1 = UNIT
-  const [ap2, setAp2] = useState('bucket_movement')    // Excel default AP#2 = BUCKET MOVEMENT
+  const [ap1, setAp1] = useState('business_segment')
+  const [ap2, setAp2] = useState('none')
   const [sortField, setSortField] = useState<keyof CollectionRow>('t1_demand')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [includeWO, setIncludeWO] = useState(true)

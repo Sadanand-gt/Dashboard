@@ -23,15 +23,15 @@ WITH
 params AS (
     SELECT
         current_date - 1                                                  AS yesterday,
-        date_trunc('month', current_date)::date                           AS curr_month_start,
-        (date_trunc('month', current_date) - interval '1 day')::date      AS prev_month_end,
-        date_trunc('month', current_date - interval '1 month')::date      AS prev_month_start,
+        date_trunc('month', current_date - 1)::date                           AS curr_month_start,
+        (date_trunc('month', current_date - 1) - interval '1 day')::date      AS prev_month_end,
+        date_trunc('month', current_date - 1 - interval '1 month')::date      AS prev_month_start,
         -- PMSD cutoff: same day-of-month in previous month
         -- e.g. June 22 → May 22; capped at prev month end
         LEAST(
-            (date_trunc('month', current_date - interval '1 month')
-             + (extract(day from current_date)::int - 1) * interval '1 day')::date,
-            (date_trunc('month', current_date) - interval '1 day')::date
+            (date_trunc('month', current_date - 1 - interval '1 month')
+             + (extract(day from current_date - 1)::int - 1) * interval '1 day')::date,
+            (date_trunc('month', current_date - 1) - interval '1 day')::date
         )                                                                 AS pmsd_cutoff
 ),
 
@@ -139,6 +139,7 @@ jlg_demand AS (
     JOIN public.home_center_master cm ON cm.center_id = la.center_id
     WHERE rs.demand_date BETWEEN
           (SELECT prev_month_start FROM params) AND (SELECT yesterday FROM params)
+      AND la.loan_id >= 10000000                 -- drop junk/test ids (e.g. 1111111)
       AND la.status NOT IN ('X', 'R')
     GROUP BY rs.demand_date, cm.branch_id, coalesce(cm.assigned_to::varchar, 'N/A')
 ),
@@ -166,6 +167,7 @@ jlg_collection AS (
     JOIN public.home_center_master cm ON cm.center_id = la.center_id
     WHERE rd.collection_date_time::date BETWEEN
           (SELECT prev_month_start FROM params) AND (SELECT yesterday FROM params)
+      AND la.loan_id >= 10000000                 -- drop junk/test ids (e.g. 1111111)
       AND rd.status = 'A'
     GROUP BY rd.collection_date_time::date, cm.branch_id, coalesce(cm.assigned_to::varchar, 'N/A')
 ),

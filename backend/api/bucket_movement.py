@@ -25,6 +25,10 @@ BUCKETS = ["Regular", "1 - 30", "31 - 60", "61 - 90", "91 - 180", "181 - 360", "
 
 
 def _apply_filters(df, f) -> pd.DataFrame:
+    # Movement universe = the PREV month-end portfolio: keep only loans on-book at
+    # 30-Jun (drops current-month disbursals; keeps current-month closures).
+    if "onbook_prev_eom" in df.columns:
+        df = df[df["onbook_prev_eom"].fillna(False).astype(bool)]
     if f.get("portfolio") == "without" and "loan_status" in df.columns:
         df = df[df["loan_status"] != "Write-off"]
     df = segment_filter(df, f.get("segment") or "ALL")
@@ -91,7 +95,10 @@ def bucket_movement_matrix(
     # write-off loans fall into their real DPD bucket, e.g. 181-360 / 360+).
     # Portfolio toggle (With / Excl. W/O) controls whether W loans are included.
     cols = list(BUCKETS)
-    pos = df.groupby(["prev_dpd_bucket", "curr_dpd_bucket"])["total_pos"].sum()
+    # POS is stated at the PREVIOUS month-end ("POS [Previous Month]" in the Excel
+    # sheet) — the live POS understates it (30-Jun: 318.24 Cr live vs 341.86 Cr EOM).
+    pcol = "prev_pos" if "prev_pos" in df.columns else "total_pos"
+    pos = df.groupby(["prev_dpd_bucket", "curr_dpd_bucket"])[pcol].sum()
     cnt = df.groupby(["prev_dpd_bucket", "curr_dpd_bucket"])["loan_count"].sum()
 
     def matrix(series, cast):
@@ -154,7 +161,7 @@ def bucket_movement_matrix(
 
     return {
         "buckets": cols, "pos": pos_m, "loans": cnt_m,
-        "summary_pos":   summarize("total_pos",  lambda v: round(v, 2)),
+        "summary_pos":   summarize(pcol,  lambda v: round(v, 2)),
         "summary_loans": summarize("loan_count", lambda v: int(v)),
     }
 
@@ -169,13 +176,14 @@ def bucket_movement_kpis(
         return {}
     df = _apply_filters(df, filters)
     dfp = df.copy()
-    tot = float(dfp["total_pos"].sum())
+    pcol = "prev_pos" if "prev_pos" in dfp.columns else "total_pos"   # POS @ prev month-end
+    tot = float(dfp[pcol].sum())
     if tot <= 0:
         return {"total_pos": 0, "loan_count": 0, "improved_pct": 0, "static_pct": 0, "worsened_pct": 0}
     pi = dfp["prev_dpd_bucket"].map(_bucket_idx)
     ci = dfp["curr_dpd_bucket"].map(_bucket_idx)
-    imp = float(dfp[ci < pi]["total_pos"].sum())
-    wor = float(dfp[ci > pi]["total_pos"].sum())
+    imp = float(dfp[ci < pi][pcol].sum())
+    wor = float(dfp[ci > pi][pcol].sum())
     sta = tot - imp - wor
     return {
         "total_pos": tot,

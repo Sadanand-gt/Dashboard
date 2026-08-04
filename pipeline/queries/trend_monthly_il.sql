@@ -64,8 +64,11 @@ il_disb AS (
         count(la.loan_id)                         AS disb_count,
         sum(la.total_loan_amount)                 AS disb_amount
     FROM public.loan_account_il la
-    WHERE la.disbursement_date >= (SELECT min(m_start) FROM months)
-      AND la.disbursement_date <= (SELECT max(m_end)   FROM months)
+    -- ::date: disbursement_date is a TIMESTAMP (IL carries a real time-of-day)
+    -- and the month bounds are DATEs; uncast, a loan disbursed at 17:14 on the
+    -- window's last day falls outside it.
+    WHERE la.disbursement_date::date >= (SELECT min(m_start) FROM months)
+      AND la.disbursement_date::date <= (SELECT max(m_end)   FROM months)
       AND la.product_id NOT ILIKE '%TOPUP%'
       AND la.status != 'V'
     GROUP BY to_char(la.disbursement_date, 'YYYY-MM')

@@ -13,12 +13,31 @@
 WITH
 
 -- ─────────────────────────────────────────────────────────────────────────────
+-- 0. WRITE-OFF MASTER (loan_id, wo_date)
+--    Overrides a loan's STATUS to 'Write-off' when the master applies (loan
+--    existed at write-off: disbursement_date <= wo_date). Universe is unchanged;
+--    the Excl-W/O view (loan_status <> 'Write-off') then matches Excel + Current
+--    Outstanding. Core open write-offs (status 'W') also label as 'Write-off'.
+-- ─────────────────────────────────────────────────────────────────────────────
+wo_master AS (
+    SELECT v.loan_id::bigint AS loan_id, v.wo_date::date AS wo_date
+    FROM (VALUES {wo_pairs}) AS v(loan_id, wo_date)
+),
+
+-- ─────────────────────────────────────────────────────────────────────────────
 -- 1. DATE ANCHORS
 -- ─────────────────────────────────────────────────────────────────────────────
 date_anchors AS (
     SELECT
-        (date_trunc('month', current_date) - interval '1 day')::date AS eom_date,
-        current_date::date                                             AS live_date
+        -- LAST COMPLETED month-end (NOT T-1 anchored): on 1-Aug this must be
+        -- 31-Jul, the month that just closed with full data. Anchoring on T-1
+        -- would resolve to 30-Jun and silently discard all of July — the same
+        -- trap as the trend engines. This snapshot is never empty, so it does
+        -- not need the 1st-of-month MTD fix applied elsewhere.
+        (date_trunc('month', current_date) - interval '1 day')::date   AS eom_date,
+        -- LIVE = the DATA date (T-1). Current Outstanding uses current_date - 1;
+        -- using current_date here made the two disagree on loans closed yesterday.
+        (current_date - 1)::date                                       AS live_date
 ),
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -170,6 +189,31 @@ jlg_dpd_live AS (
 ),
 
 -- ─────────────────────────────────────────────────────────────────────────────
+-- 6c. POS AS AT THE MONTH-END (not today's POS)
+--     The EOM snapshot must state POS as it stood on eom_date. Using the live
+--     principal_outstanding understates it, because loans repay during the
+--     current month and loans closed since read 0. Same measure as
+--     aum_status.sql's prev_pos, so POS & PAR EOM ties OD Status / the trend.
+-- ─────────────────────────────────────────────────────────────────────────────
+il_pos_eom AS (
+    SELECT rd.loan_id, sum(coalesce(rd.principal_collected, 0)) AS prin_coll
+    FROM public.repayment_detail_il rd
+    CROSS JOIN date_anchors da
+    WHERE rd.collection_date_time::date <= da.eom_date
+      AND rd.status IN ('A', 'V')
+    GROUP BY rd.loan_id
+),
+
+jlg_pos_eom AS (
+    SELECT rd.loan_id, sum(coalesce(rd.principal_collected, 0)) AS prin_coll
+    FROM public.repayment_detail rd
+    CROSS JOIN date_anchors da
+    WHERE rd.collection_date::date <= da.eom_date
+      AND rd.status IN ('A', 'V')
+    GROUP BY rd.loan_id
+),
+
+-- ─────────────────────────────────────────────────────────────────────────────
 -- 7a. IL LOAN UNIVERSE — EOM
 -- ─────────────────────────────────────────────────────────────────────────────
 il_eom AS (
@@ -180,16 +224,35 @@ il_eom AS (
         la.loan_id,
         la.branch_id,
         la.loan_officer          AS lo_id,
-        la.principal_outstanding AS pos,
-        coalesce(dpd.dpd, 0)     AS dpd
+        -- POS AS AT eom_date, not today's balance — see il_pos_eom.
+        greatest(coalesce(la.total_loan_amount, 0) - coalesce(pe.prin_coll, 0), 0) AS pos,
+        coalesce(dpd.dpd, 0)     AS dpd,
+        CASE WHEN la.status = 'W' OR (w.loan_id IS NOT NULL
+                  AND (w.wo_date IS NULL OR la.disbursement_date::date <= w.wo_date))
+             THEN 'Write-off' ELSE 'Active' END  AS loan_status
     FROM public.loan_account_il la
     CROSS JOIN date_anchors da
+    LEFT JOIN wo_master w    ON w.loan_id   = la.loan_id
     LEFT JOIN il_dpd_eom dpd ON dpd.loan_id = la.loan_id
-    WHERE la.disbursement_date <= da.eom_date
-      AND la.status NOT IN ('X', 'R')
+    LEFT JOIN il_pos_eom pe  ON pe.loan_id  = la.loan_id
+    -- ::date on BOTH sides of every anchor compare. IL disbursement/closure dates are
+    -- TIMESTAMPs with a real time-of-day (4,809 of 7,743 rows); the anchors are DATEs.
+    -- Uncast, a loan disbursed at 17:14 on the anchor day is dropped, and one closed
+    -- at 17:14 on the anchor day is held open. JLG is always 00:00:00, so IL only.
+    WHERE la.disbursement_date::date <= da.eom_date
+      AND la.status <> 'R'
       AND (
-            la.status = 'A'
-            OR (la.status = 'W' AND la.closure_date > da.eom_date)
+            -- Death cases (D / I) are still OUTSTANDING loans and must be counted,
+            -- exactly like Current Outstanding / Trend. Excluding them made POS & PAR
+            -- read 94,021 against Current Outstanding's 94,119 (99 death loans).
+            (la.status IN ('A','D','I')
+             AND (la.closure_date IS NULL OR la.closure_date::date > da.eom_date))
+            OR (la.status = 'W' AND la.closure_date::date > da.eom_date)
+            -- CLOSED SINCE the snapshot: status is 'X' today, but the loan was on
+            -- book on eom_date, so the month-end portfolio must include it. Without
+            -- this, EOM read 93,923 against the 94,201 month-end (278 closures).
+            -- LIVE deliberately does NOT get this branch — 'X' is closed now.
+            OR (la.status = 'X' AND la.closure_date::date > da.eom_date)
           )
 ),
 
@@ -205,15 +268,23 @@ il_live AS (
         la.branch_id,
         la.loan_officer          AS lo_id,
         la.principal_outstanding AS pos,
-        coalesce(dpd.dpd, 0)     AS dpd
+        coalesce(dpd.dpd, 0)     AS dpd,
+        CASE WHEN la.status = 'W' OR (w.loan_id IS NOT NULL
+                  AND (w.wo_date IS NULL OR la.disbursement_date::date <= w.wo_date))
+             THEN 'Write-off' ELSE 'Active' END  AS loan_status
     FROM public.loan_account_il la
     CROSS JOIN date_anchors da
+    LEFT JOIN wo_master w     ON w.loan_id   = la.loan_id
     LEFT JOIN il_dpd_live dpd ON dpd.loan_id = la.loan_id
-    WHERE la.disbursement_date <= da.live_date
+    WHERE la.disbursement_date::date <= da.live_date       -- ::date: see il_eom note
       AND la.status NOT IN ('X', 'R')
       AND (
-            la.status = 'A'
-            OR (la.status = 'W' AND la.closure_date > da.live_date)
+            -- Death cases (D / I) are still OUTSTANDING loans and must be counted,
+            -- exactly like Current Outstanding / Trend. Excluding them made POS & PAR
+            -- read 94,021 against Current Outstanding's 94,119 (99 death loans).
+            (la.status IN ('A','D','I')
+             AND (la.closure_date IS NULL OR la.closure_date::date > da.live_date))
+            OR (la.status = 'W' AND la.closure_date::date > da.live_date)
           )
 ),
 
@@ -229,18 +300,37 @@ jlg_eom AS (
         hla.loan_id,
         cm.branch_id,
         cm.assigned_to::varchar AS lo_id,
-        hla.prin_os          AS pos,
-        coalesce(dpd.dpd, 0) AS dpd
+        -- POS AS AT eom_date, not today's balance — see jlg_pos_eom.
+        greatest(coalesce(hla.total_loan_amount, 0) - coalesce(pe.prin_coll, 0), 0) AS pos,
+        coalesce(dpd.dpd, 0) AS dpd,
+        CASE WHEN hla.status = 'W' OR (w.loan_id IS NOT NULL
+                  AND (w.wo_date IS NULL OR hla.disbursement_date::date <= w.wo_date))
+             THEN 'Write-off' ELSE 'Active' END  AS loan_status
     FROM public.home_loan_account hla
     JOIN public.home_center_master cm ON hla.center_id = cm.center_id
     CROSS JOIN date_anchors da
+    LEFT JOIN wo_master w     ON w.loan_id   = hla.loan_id
     LEFT JOIN jlg_dpd_eom dpd ON dpd.loan_id = hla.loan_id
-    WHERE hla.disbursement_date <= da.eom_date
-      AND hla.status NOT IN ('X', 'R')
+    LEFT JOIN jlg_pos_eom pe  ON pe.loan_id  = hla.loan_id
+    WHERE hla.disbursement_date::date <= da.eom_date   -- ::date: see il_eom note
+      AND hla.loan_id >= 10000000                 -- drop junk/test ids (e.g. 1111111)
+      AND hla.status <> 'R'
       AND (
-            hla.status = 'A'
-            OR (hla.status = 'W' AND hla.closure_date > da.eom_date)
+            -- Death cases (D / I) count — see note in the IL block above.
+            (hla.status IN ('A','D','I')
+             AND (hla.closure_date IS NULL OR hla.closure_date::date > da.eom_date))
+            OR (hla.status = 'W' AND hla.closure_date::date > da.eom_date)
+            -- Closed SINCE the snapshot — on book at eom_date. See il_eom.
+            OR (hla.status = 'X' AND hla.closure_date::date > da.eom_date)
           )
+      -- Cross-listed loan_id: IL is primary when the IL loan was disbursed later
+      -- (customers graduate JLG -> IL). Stock report, so count the loan once.
+      AND NOT EXISTS (
+          SELECT 1 FROM public.loan_account_il il
+          WHERE il.loan_id = hla.loan_id
+            AND il.status IN ('A','D','I','W')
+            AND il.disbursement_date > hla.disbursement_date
+      )
 ),
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -255,17 +345,32 @@ jlg_live AS (
         cm.branch_id,
         cm.assigned_to::varchar AS lo_id,
         hla.prin_os          AS pos,
-        coalesce(dpd.dpd, 0) AS dpd
+        coalesce(dpd.dpd, 0) AS dpd,
+        CASE WHEN hla.status = 'W' OR (w.loan_id IS NOT NULL
+                  AND (w.wo_date IS NULL OR hla.disbursement_date::date <= w.wo_date))
+             THEN 'Write-off' ELSE 'Active' END  AS loan_status
     FROM public.home_loan_account hla
     JOIN public.home_center_master cm ON hla.center_id = cm.center_id
     CROSS JOIN date_anchors da
+    LEFT JOIN wo_master w      ON w.loan_id   = hla.loan_id
     LEFT JOIN jlg_dpd_live dpd ON dpd.loan_id = hla.loan_id
-    WHERE hla.disbursement_date <= da.live_date
+    WHERE hla.disbursement_date::date <= da.live_date  -- ::date: see il_eom note
+      AND hla.loan_id >= 10000000                 -- drop junk/test ids (e.g. 1111111)
       AND hla.status NOT IN ('X', 'R')
       AND (
-            hla.status = 'A'
-            OR (hla.status = 'W' AND hla.closure_date > da.live_date)
+            -- Death cases (D / I) count — see note in the IL block above.
+            (hla.status IN ('A','D','I')
+             AND (hla.closure_date IS NULL OR hla.closure_date::date > da.live_date))
+            OR (hla.status = 'W' AND hla.closure_date::date > da.live_date)
           )
+      -- Cross-listed loan_id: IL is primary when the IL loan was disbursed later
+      -- (customers graduate JLG -> IL). Stock report, so count the loan once.
+      AND NOT EXISTS (
+          SELECT 1 FROM public.loan_account_il il
+          WHERE il.loan_id = hla.loan_id
+            AND il.status IN ('A','D','I','W')
+            AND il.disbursement_date > hla.disbursement_date
+      )
 ),
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -307,6 +412,7 @@ SELECT
     lf.report_type,
     lf.report_date,
     lf.loan_source,
+    lf.loan_status,
 
     coalesce(h.cluster_name, 'Unassigned') AS cluster_name,
     coalesce(h.region_name,  'Unassigned') AS region_name,
@@ -344,6 +450,7 @@ GROUP BY
     lf.report_type,
     lf.report_date,
     lf.loan_source,
+    lf.loan_status,
     h.cluster_name,
     h.region_name,
     h.area_name,

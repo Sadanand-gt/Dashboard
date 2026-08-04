@@ -11,6 +11,12 @@
 --                monthly buckets); improves once rpt_dpd_snapshot accrues real months.
 -- =============================================================================
 WITH
+-- Write-off master matched on loan_id AND date (loan_id repeats across JLG/IL;
+-- a write-off can only apply to a loan that existed when it was written off).
+wo_master AS (
+    SELECT v.loan_id::bigint AS loan_id, v.wo_date::date AS wo_date
+    FROM (VALUES {wo_pairs}) AS v(loan_id, wo_date)
+),
 hierarchy AS (
     SELECT bm.branch_id, bm.branch_name, a.area_name,
         reg.branch_name AS region_name, clus.area_name AS cluster_name,
@@ -31,9 +37,23 @@ il_cand AS (
               OR upper(trim(la.product_id::text)) LIKE '%UDYOGINI%'
               OR upper(trim(la.product_id::text)) LIKE '%SECURED%' THEN 'LAP' ELSE 'IEL' END AS business_segment,
         la.principal_outstanding AS pos,
-        CASE WHEN la.loan_id IN ({wo_ids}) OR la.status='W' THEN 'W' ELSE la.status END AS raw_status
+        CASE WHEN la.status='W' OR (w.loan_id IS NOT NULL
+                 AND (w.wo_date IS NULL OR la.disbursement_date::date <= w.wo_date))
+             THEN 'W' ELSE la.status END AS raw_status
     FROM public.loan_account_il la
+    LEFT JOIN wo_master w ON w.loan_id = la.loan_id
     WHERE la.status IN ('A','D','I','W') AND coalesce(la.dpd,0) > 0
+      -- Universe aligned with aum_status so this report equals the OD Status
+      -- matrix "OD Slippage" column exactly (was over-counting: current-month
+      -- disbursals cannot have slipped from a month-end they did not exist at).
+      AND la.loan_id >= 10000000
+      AND la.disbursement_date::date <= (date_trunc('month', current_date) - interval '1 day')::date
+      AND (la.closure_date IS NULL OR la.closure_date::date > current_date - 1 OR la.status = 'W')
+      -- Excl. W/O basis: this report must equal the OD Status matrix "OD Slippage"
+      -- column (and the Excel OD Slippage sheet), both of which drop write-offs.
+      -- Uses the write-off MASTER, not just core status='W'.
+      AND NOT (la.status = 'W' OR (w.loan_id IS NOT NULL
+               AND (w.wo_date IS NULL OR la.disbursement_date::date <= w.wo_date)))
 ),
 il_due AS (
     SELECT rs.loan_id,
@@ -101,11 +121,23 @@ il_od AS (
 jlg_cand AS (
     SELECT la.loan_id, cm.branch_id, cm.assigned_to::varchar AS lo_id, 'JLG'::text AS business_segment,
         la.prin_os AS pos,
-        CASE WHEN la.loan_id IN ({wo_ids}) OR la.status='W' THEN 'W' ELSE la.status END AS raw_status
+        CASE WHEN la.status='W' OR (w.loan_id IS NOT NULL
+                 AND (w.wo_date IS NULL OR la.disbursement_date::date <= w.wo_date))
+             THEN 'W' ELSE la.status END AS raw_status
     FROM public.home_loan_account la
     JOIN public.home_center_master cm ON cm.center_id = la.center_id
+    LEFT JOIN wo_master w ON w.loan_id = la.loan_id
     WHERE la.status IN ('A','D','I','W') AND coalesce(la.dpd,0) > 0
       AND (la.status <> 'W' OR la.prin_os > 0)
+      -- Universe aligned with aum_status (see il_base above).
+      AND la.loan_id >= 10000000
+      AND la.disbursement_date::date <= (date_trunc('month', current_date) - interval '1 day')::date
+      AND (la.closure_date IS NULL OR la.closure_date::date > current_date - 1 OR la.status = 'W')
+      -- Excl. W/O basis: this report must equal the OD Status matrix "OD Slippage"
+      -- column (and the Excel OD Slippage sheet), both of which drop write-offs.
+      -- Uses the write-off MASTER, not just core status='W'.
+      AND NOT (la.status = 'W' OR (w.loan_id IS NOT NULL
+               AND (w.wo_date IS NULL OR la.disbursement_date::date <= w.wo_date)))
       AND NOT EXISTS (
           SELECT 1 FROM public.loan_account_il il
           WHERE il.loan_id = la.loan_id AND il.status IN ('A','D','I','W')

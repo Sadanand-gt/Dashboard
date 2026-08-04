@@ -50,7 +50,7 @@ function odColor(v: number): string {
 
 export function Ageing() {
   const [ap1, setAp1] = useState('business_segment')
-  const [ap2, setAp2] = useState('dpd_bucket')       // Excel default AP#2 = OD_BUCKET
+  const [ap2, setAp2] = useState('none')
   const [includeWO, setIncludeWO] = useState(false)  // default Excl. W/O (matches Excel)
 
   const slicer = useSlicerParams()
@@ -113,7 +113,7 @@ export function Ageing() {
         <KpiCard label="Total POS" value={kpis ? fmtInr(kpis.total_pos) : '—'} sub={kpis ? `${fmtNum(kpis.loan_count)} loans` : ''} variant="default" loading={kpiLoading} />
         <KpiCard label="OD Amount" value={kpis ? fmtInr(kpis.od_amt) : '—'} sub={kpis ? `${fmtPct(kpis.od_pct)} of POS` : ''} variant="amber" loading={kpiLoading} />
         <KpiCard label="Loans in OD" value={kpis ? fmtNum(kpis.loans_in_od) : '—'} sub={kpis ? `of ${fmtNum(kpis.loan_count)} loans` : ''} variant="red" loading={kpiLoading} />
-        <KpiCard label="OD-to-Disb %" value={kpis ? fmtPct(kpis.od_to_disb) : '—'} variant={kpis && kpis.od_to_disb < 1 ? 'green' : kpis && kpis.od_to_disb < 3 ? 'amber' : 'red'} loading={kpiLoading} />
+        <KpiCard label="OD-to-POS %" value={kpis ? fmtPct(kpis.od_to_disb) : '—'} variant={kpis && kpis.od_to_disb < 1 ? 'green' : kpis && kpis.od_to_disb < 3 ? 'amber' : 'red'} loading={kpiLoading} />
       </Box>
 
       {/* Table */}
@@ -136,7 +136,7 @@ export function Ageing() {
                   <TableCell align="right">%</TableCell>
                   <TableCell align="right"># Loans</TableCell>
                   <TableCell align="right">OD Amt</TableCell>
-                  <TableCell align="right">OD-to-Disb %</TableCell>
+                  <TableCell align="right">OD-to-POS %</TableCell>
                 </TableRow>
               </TableHead>
               <TableBody>

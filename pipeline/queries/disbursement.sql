@@ -246,7 +246,7 @@ jlg_t1 AS (
     FROM public.home_loan_account hla
     JOIN public.home_center_master cm ON hla.center_id = cm.center_id
     CROSS JOIN date_anchors da
-    WHERE hla.disbursement_date::date = da.t1_date AND hla.status IN ('A', 'X')
+    WHERE hla.disbursement_date::date = da.t1_date AND hla.loan_id >= 10000000 AND hla.status IN ('A', 'X')
 ),
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -262,7 +262,7 @@ jlg_pmsd AS (
     FROM public.home_loan_account hla
     JOIN public.home_center_master cm ON hla.center_id = cm.center_id
     CROSS JOIN date_anchors da
-    WHERE hla.disbursement_date::date = da.pmsd_date AND hla.status IN ('A', 'X')
+    WHERE hla.disbursement_date::date = da.pmsd_date AND hla.loan_id >= 10000000 AND hla.status IN ('A', 'X')
 ),
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -280,7 +280,7 @@ jlg_mtd AS (
     CROSS JOIN date_anchors da
     WHERE hla.disbursement_date::date >= da.mtd_start
       AND hla.disbursement_date::date <= da.mtd_end
-      AND hla.status IN ('A', 'X')
+      AND hla.loan_id >= 10000000 AND hla.status IN ('A', 'X')
 ),
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -298,7 +298,7 @@ jlg_pm AS (
     CROSS JOIN date_anchors da
     WHERE hla.disbursement_date::date >= da.pm_start
       AND hla.disbursement_date::date <= da.pm_end
-      AND hla.status IN ('A', 'X')
+      AND hla.loan_id >= 10000000 AND hla.status IN ('A', 'X')
 ),
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -316,7 +316,7 @@ jlg_pmtd AS (
     CROSS JOIN date_anchors da
     WHERE hla.disbursement_date::date >= da.pmtd_start
       AND hla.disbursement_date::date <= da.pmtd_end
-      AND hla.status IN ('A', 'X')
+      AND hla.loan_id >= 10000000 AND hla.status IN ('A', 'X')
 ),
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -334,7 +334,7 @@ jlg_ytd AS (
     CROSS JOIN date_anchors da
     WHERE hla.disbursement_date::date >= da.ytd_start
       AND hla.disbursement_date::date <= da.t1_date
-      AND hla.status IN ('A', 'X')
+      AND hla.loan_id >= 10000000 AND hla.status IN ('A', 'X')
 ),
 
 -- ─────────────────────────────────────────────────────────────────────────────

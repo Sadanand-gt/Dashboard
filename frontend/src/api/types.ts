@@ -1,4 +1,4 @@
-export type Role = 'admin' | 'manager' | 'analyst' | 'branch_user'
+export type Role = 'admin' | 'manager' | 'officer' | 'branch_user'
 
 // Data-scope hierarchy levels: HO sees all; others see their slice.
 export type ScopeLevel = 'ho' | 'zone' | 'cluster' | 'region' | 'area' | 'branch' | 'lo'

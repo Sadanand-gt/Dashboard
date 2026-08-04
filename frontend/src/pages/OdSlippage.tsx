@@ -16,6 +16,7 @@ import { api } from '../api/client'
 import { KpiCard } from '../components/KpiCard'
 import { useSlicerParams } from '../store/filterStore'
 import { DimSelect, fmtInr, fmtNum, inrUnit, fmtUnit, bucketRank } from './collectionShared'
+import { TrendSection } from '../components/TrendSection'
 
 // Full analysis-parameter set (rpt_od_slippage + dims enriched from rpt_od_list).
 const AP_DIMS = [
@@ -178,6 +179,11 @@ export function OdSlippage() {
           </Box>
         )}
       </Paper>
+
+      <TrendSection title="Trend — OD Slippage"
+        portfolio={includeWO ? 'with' : 'excl'} ap1={ap1} ap2={ap2}
+        measures={[{ key: 'slip_count', label: '# OD Slippage', format: 'num' }, { key: 'slip_pos', label: '₹ OD Slippage', format: 'inr' }]} />
+
     </Box>
   )
 }

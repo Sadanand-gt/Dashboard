@@ -2,8 +2,8 @@
 WITH
 ref AS (
     SELECT
-        (date_trunc('month', current_date) - interval '1 day')::date AS prev_month_end,
-        date_trunc('month', current_date)::date                       AS curr_month_start
+        (date_trunc('month', current_date - 1) - interval '1 day')::date AS prev_month_end,
+        date_trunc('month', current_date - 1)::date                       AS curr_month_start
 ),
 hierarchy AS (
     SELECT bm.branch_id, bm.branch_name, a.area_name,
@@ -79,6 +79,7 @@ jlg_loans AS (
     WHERE (la.status IN ('A','D','I','W')
         OR (la.closure_date IS NOT NULL
             AND la.closure_date::date >= (SELECT curr_month_start FROM ref)))
+      AND la.loan_id >= 10000000                 -- drop junk/test ids (e.g. 1111111)
       AND (la.status != 'W' OR la.prin_os > 0)
       AND NOT EXISTS (
           SELECT 1 FROM public.loan_account_il il

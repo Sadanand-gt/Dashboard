@@ -188,16 +188,21 @@ def collection_kpis(filters: dict = Depends(_filter_params), user: dict = Depend
     m = _row_metrics(df)
     # PMSD = previous month SAME DAY → T-1 comparison.  .pbit [CE % PMSD] caps the
     # numerator at demand (unlike the uncapped MTD CE / Efficiency MTD).
+    # Both comparison ratios use _div, exactly like the periods they are compared
+    # AGAINST (t1_ce and mtd_ce). They used to use the capped _pct while their
+    # counterparts were uncapped, so a "vs last month" read was never like-for-like.
     psd, psc = float(df["pmsd_demand"].sum()), float(df["pmsd_collection"].sum())
     m["pmsd_demand"] = psd
     m["pmsd_collection"] = psc
-    m["pmsd_ce"] = _pct(psc, psd)                       # .pbit [CE % PMSD] — capped
-    # PMTD = previous month TO DATE → MTD comparison.  .pbit [CE till PMSD] — capped.
+    m["pmsd_ce"] = _div(psc, psd)                       # mirrors t1_ce (raw / raw)
+    # PMTD = previous month TO DATE → MTD comparison. pmtd_collection is now built
+    # in SQL with the same .pbit [Collection] cap + opening advance as mtd_collection,
+    # so this ratio mirrors mtd_ce exactly.
     ptd = float(df["pmtd_demand"].sum()) if "pmtd_demand" in df.columns else 0.0
     ptc = float(df["pmtd_collection"].sum()) if "pmtd_collection" in df.columns else 0.0
     m["pmtd_demand"] = ptd
     m["pmtd_collection"] = ptc
-    m["pmtd_ce"] = _pct(ptc, ptd)                       # .pbit [CE till PMSD] — capped
+    m["pmtd_ce"] = _div(ptc, ptd)                       # mirrors mtd_ce
     return m
 
 

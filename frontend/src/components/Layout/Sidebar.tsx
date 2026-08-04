@@ -24,6 +24,8 @@ import CategoryIcon from '@mui/icons-material/Category'
 import MoveDownIcon from '@mui/icons-material/MoveDown'
 import CreditCardIcon from '@mui/icons-material/CreditCard'
 import ShowChartIcon from '@mui/icons-material/ShowChart'
+import GppMaybeIcon from '@mui/icons-material/GppMaybe'
+import HandshakeIcon from '@mui/icons-material/Handshake'
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft'
 import ChevronRightIcon from '@mui/icons-material/ChevronRight'
 import MenuIcon from '@mui/icons-material/Menu'
@@ -44,35 +46,51 @@ interface NavItem {
   roles?: string[]
 }
 
+// Page access is controlled per user by the report whitelist (canSeePath) —
+// NOT by role. Roles only gate the Administration section below.
 const NAV_ITEMS: NavItem[] = [
   { label: 'Executive Summary',   path: '/dashboard',                icon: <DashboardIcon fontSize="small" /> },
   { label: 'Current Outstanding', path: '/dashboard/aum',            icon: <AccountBalanceIcon fontSize="small" /> },
-  { label: 'AUM — DPD Detail',    path: '/dashboard/aum-live',       icon: <BoltIcon fontSize="small" />, roles: ['admin', 'manager', 'analyst'] },
-  { label: 'Ageing Analysis',     path: '/dashboard/ageing',         icon: <ShowChartIcon fontSize="small" />, roles: ['admin', 'manager', 'analyst'] },
-  { label: 'OD Status',           path: '/dashboard/od-status',      icon: <ReportProblemIcon fontSize="small" />, roles: ['admin', 'manager', 'analyst'] },
-  { label: 'OD Slippage',         path: '/dashboard/od-slippage',    icon: <MoveDownIcon fontSize="small" />, roles: ['admin', 'manager', 'analyst'] },
-  { label: 'DQ Category',         path: '/dashboard/dq-category',    icon: <CategoryIcon fontSize="small" />, roles: ['admin', 'manager', 'analyst'] },
+  { label: 'AUM — DPD Detail',    path: '/dashboard/aum-live',       icon: <BoltIcon fontSize="small" /> },
+  { label: 'Ageing Analysis',     path: '/dashboard/ageing',         icon: <ShowChartIcon fontSize="small" /> },
+  { label: 'OD Status',           path: '/dashboard/od-status',      icon: <ReportProblemIcon fontSize="small" /> },
+  { label: 'OD Slippage',         path: '/dashboard/od-slippage',    icon: <MoveDownIcon fontSize="small" /> },
+  { label: 'DQ Category',         path: '/dashboard/dq-category',    icon: <CategoryIcon fontSize="small" /> },
   { label: 'T-1 Collection',      path: '/dashboard/daily',          icon: <CalendarTodayIcon fontSize="small" /> },
   { label: 'MTD Collection',      path: '/dashboard/mtd',            icon: <BarChartIcon fontSize="small" /> },
-  { label: 'Cashless Collection', path: '/dashboard/cashless',       icon: <CreditCardIcon fontSize="small" />, roles: ['admin', 'manager', 'analyst'] },
-  { label: 'Disbursement',        path: '/dashboard/disbursement',   icon: <AttachMoneyIcon fontSize="small" />, roles: ['admin', 'manager', 'analyst'] },
-  { label: 'POS & PAR',           path: '/dashboard/pos-par',        icon: <TrendingUpIcon fontSize="small" />, roles: ['admin', 'manager', 'analyst'] },
-  { label: 'Delinquencies',       path: '/dashboard/delinquencies',  icon: <ReportProblemIcon fontSize="small" />, roles: ['admin', 'manager', 'analyst'] },
-  { label: 'Bucket Movement',     path: '/dashboard/bucket-movement',icon: <SwapVertIcon fontSize="small" />, roles: ['admin', 'manager', 'analyst'] },
-  { label: 'Case Movement',       path: '/dashboard/case-movement',  icon: <MoveDownIcon fontSize="small" />, roles: ['admin', 'manager', 'analyst'] },
-  { label: 'Write-Off',           path: '/dashboard/writeoff',       icon: <WarningAmberIcon fontSize="small" />, roles: ['admin', 'manager', 'analyst'] },
-  { label: 'Monthly Trend',       path: '/dashboard/trend',          icon: <ShowChartIcon fontSize="small" />, roles: ['admin', 'manager', 'analyst'] },
+  { label: 'Cashless Collection', path: '/dashboard/cashless',       icon: <CreditCardIcon fontSize="small" /> },
+  { label: 'Disbursement',        path: '/dashboard/disbursement',   icon: <AttachMoneyIcon fontSize="small" /> },
+  { label: 'POS & PAR',           path: '/dashboard/pos-par',        icon: <TrendingUpIcon fontSize="small" /> },
+  { label: 'Delinquencies',       path: '/dashboard/delinquencies',  icon: <ReportProblemIcon fontSize="small" /> },
+  { label: 'Bucket Movement',     path: '/dashboard/bucket-movement',icon: <SwapVertIcon fontSize="small" /> },
+  { label: 'Case Movement',       path: '/dashboard/case-movement',  icon: <MoveDownIcon fontSize="small" /> },
+  { label: 'Write-Off',           path: '/dashboard/writeoff',       icon: <WarningAmberIcon fontSize="small" /> },
+  { label: 'Monthly Trend',       path: '/dashboard/trend',          icon: <ShowChartIcon fontSize="small" /> },
+  { label: 'AML Risk Category',   path: '/dashboard/aml',            icon: <GppMaybeIcon fontSize="small" /> },
+  { label: 'OTS & Recovery',      path: '/dashboard/ots',            icon: <HandshakeIcon fontSize="small" /> },
 ]
 
 const ADMIN_ITEMS: NavItem[] = [
   { label: 'User Management', path: '/dashboard/admin/users', icon: <PeopleIcon fontSize="small" />, roles: ['admin'] },
 ]
 
-const ROLE_BADGE: Record<string, { label: string; color: 'error' | 'warning' | 'info' | 'success' | 'default' }> = {
-  admin:       { label: 'Admin',   color: 'error' },
-  manager:     { label: 'Manager', color: 'warning' },
-  analyst:     { label: 'Analyst', color: 'info' },
-  branch_user: { label: 'Branch',  color: 'success' },
+// Badge shows the user's DATA SCOPE (what slice of the organisation they
+// see), not their app role — a CEO with HO-wide access reads "HO User".
+type BadgeColor = 'error' | 'warning' | 'info' | 'success' | 'default'
+const SCOPE_BADGE: Record<string, { label: string; color: BadgeColor }> = {
+  ho:      { label: 'HO User',      color: 'info' },
+  zone:    { label: 'Zone User',    color: 'warning' },
+  cluster: { label: 'Cluster User', color: 'warning' },
+  region:  { label: 'Region User',  color: 'warning' },
+  area:    { label: 'Area User',    color: 'success' },
+  branch:  { label: 'Branch User',  color: 'success' },
+  lo:      { label: 'LO User',      color: 'default' },
+}
+
+function scopeBadge(user: { scope_level?: string | null; role: string } | null) {
+  if (!user) return null
+  const lvl = (user.scope_level || '').toLowerCase()
+  return SCOPE_BADGE[lvl] ?? SCOPE_BADGE.ho   // no scope (or admin) = HO-wide
 }
 
 export function Sidebar() {
@@ -166,7 +184,7 @@ export function Sidebar() {
   }
 
   // ── Expanded mode ───────────────────────────────────────────────────────────
-  const roleBadge = user ? ROLE_BADGE[user.role] : null
+  const roleBadge = scopeBadge(user)
 
   return (
     <Box

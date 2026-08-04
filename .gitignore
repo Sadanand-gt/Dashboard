@@ -52,4 +52,16 @@ sheets.txt
 .vscode/
 .idea/
 
-# ── OS cruft ─────────────────�
+# ── Generated manual-validation SQL (write-off list baked in, ~745 KB each) ──
+pipeline/queries/manual/
+
+# ── One-off manual pgAdmin verification scripts (not part of the pipeline) ──
+validation_current_outstanding.sql
+pipeline/queries/_tmp_*.sql
+
+# ── TypeScript build cache ────────────────────────────────
+*.tsbuildinfo
+
+# ── OS cruft ──────────────────────────────────────────────
+.DS_Store
+Thumbs.db

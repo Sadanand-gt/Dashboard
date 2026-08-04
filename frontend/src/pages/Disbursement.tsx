@@ -23,6 +23,7 @@ import {
 import { api } from '../api/client'
 import { KpiCard } from '../components/KpiCard'
 import { useSlicerParams } from '../store/filterStore'
+import { TrendSection } from '../components/TrendSection'
 
 // ── Analysis Parameters meaningful for a disbursement event ───────────────────
 // (Risk / current-state dimensions like OD Bucket, Loan Status, Bucket Movement
@@ -163,9 +164,6 @@ export function Disbursement() {
   const [sortField, setSortField] = useState<SortField>('mtd_amount')
   const [sortDir,   setSortDir]   = useState<'asc' | 'desc'>('desc')
   const [chartDim,  setChartDim]  = useState('business_segment')
-  const [trendFreq, setTrendFreq] = useState<'day' | 'month' | 'quarter' | 'year'>('month')
-  const [trendFy,   setTrendFy]   = useState('')      // '' = latest FY
-  const [trendYoy,  setTrendYoy]  = useState(false)
 
   const slicerParams = useSlicerParams()
 
@@ -194,18 +192,6 @@ export function Disbursement() {
   const { data: chartRows = [] } = useQuery<GroupRow[]>({
     queryKey: ['disb-chart', chartDim, slicerParams],
     queryFn:  () => api.get('/api/disbursement/group-summary', { params: { ...slicerParams, group_by: chartDim } }).then((r) => r.data),
-  })
-
-  // Chart 2 — disbursement trend on the Indian fiscal calendar (FY select + YoY)
-  const { data: trendResp } = useQuery<DisbTrendResp>({
-    queryKey: ['disb-trend', trendFreq, trendFy, trendYoy],
-    queryFn:  () => api.get('/api/disbursement/trend', {
-      params: {
-        freq: trendFreq,
-        ...(trendFy ? { fy: trendFy } : {}),
-        ...(trendYoy && trendFreq !== 'year' && trendFreq !== 'day' ? { yoy: 1 } : {}),
-      },
-    }).then((r) => r.data),
   })
 
   const handleSort = (field: SortField) => {
@@ -243,26 +229,6 @@ export function Disbursement() {
       })),
   [chartRows])
 
-  const trendPoints = trendResp?.points ?? []
-  const trendFys = trendResp?.fys ?? []
-  const isYoy = trendYoy && trendFreq !== 'year' && trendFreq !== 'day'
-    && trendPoints.some((p) => 'cur' in p)
-
-  const trendData = useMemo(() => {
-    if (isYoy) {
-      return trendPoints.map((t) => ({
-        period:  t.period,
-        cur:     t.cur  != null ? +(t.cur  / 1e7).toFixed(2) : null,
-        prev:    t.prev != null ? +(t.prev / 1e7).toFixed(2) : null,
-        yoy_pct: t.yoy_pct,
-      }))
-    }
-    return trendPoints.map((t) => ({
-      period: t.period,
-      amount: +((t.amount ?? 0) / 1e7).toFixed(2),
-      count:  t.count ?? 0,
-    }))
-  }, [trendPoints, isYoy])
 
 
   const ap1Label  = DIM_OPTIONS.find((o) => o.value === ap1)?.label ?? ''
@@ -488,71 +454,12 @@ export function Disbursement() {
           </Box>
         </Paper>
 
-        <Paper sx={{ overflow: 'hidden' }}>
-          <Box sx={{
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, flexWrap: 'wrap',
-            px: 2.5, py: 1, borderBottom: '1px solid rgba(0,0,0,0.06)', background: '#FAFBFF',
-          }}>
-            <Box sx={{ fontWeight: 700, fontSize: '0.85rem', color: '#1E293B' }}>
-              Disbursement Trend {isYoy ? `— ${trendResp?.cur_fy} vs ${trendResp?.prev_fy}` : '(₹ Cr)'}
-            </Box>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <FormControl size="small" sx={{ minWidth: 84 }}>
-                <Select value={trendFy} onChange={(e) => setTrendFy(e.target.value)} displayEmpty
-                  disabled={trendFreq === 'year'}
-                  sx={{ fontSize: '0.7rem', height: 24 }}>
-                  <MenuItem value="" sx={{ fontSize: '0.7rem' }}>Latest FY</MenuItem>
-                  {trendFys.map((f) => <MenuItem key={f} value={f} sx={{ fontSize: '0.7rem' }}>{f}</MenuItem>)}
-                </Select>
-              </FormControl>
-              <ToggleButtonGroup value={trendFreq} exclusive size="small"
-                onChange={(_, v) => { if (v) setTrendFreq(v) }} sx={{ height: 24 }}>
-                <ToggleButton value="day"     sx={{ px: 1.1, fontSize: '0.66rem', height: 24 }}>Day</ToggleButton>
-                <ToggleButton value="month"   sx={{ px: 1.1, fontSize: '0.66rem', height: 24 }}>Month</ToggleButton>
-                <ToggleButton value="quarter" sx={{ px: 1.1, fontSize: '0.66rem', height: 24 }}>Quarter</ToggleButton>
-                <ToggleButton value="year"    sx={{ px: 1.1, fontSize: '0.66rem', height: 24 }}>Year</ToggleButton>
-              </ToggleButtonGroup>
-              <ToggleButton value="yoy" selected={isYoy} size="small"
-                disabled={trendFreq === 'year' || trendFreq === 'day'}
-                onChange={() => setTrendYoy((v) => !v)}
-                sx={{ px: 1.2, fontSize: '0.66rem', height: 24, fontWeight: 700 }}>
-                YoY
-              </ToggleButton>
-            </Box>
-          </Box>
-          <Box sx={{ p: 2, height: 300 }}>
-            {/* Two complete chart variants — recharts mishandles conditional children */}
-            {isYoy ? (
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={trendData} margin={{ top: 8, right: 16, left: 0, bottom: 4 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.05)" />
-                  <XAxis dataKey="period" tick={{ fill: '#64748B', fontSize: 10 }} axisLine={{ stroke: 'rgba(0,0,0,0.1)' }} tickLine={false} interval={0} />
-                  <YAxis tick={{ fill: '#64748B', fontSize: 10 }} axisLine={false} tickLine={false} />
-                  <RTooltip contentStyle={{ background: '#fff', border: '1px solid rgba(0,0,0,0.1)', borderRadius: 8, fontSize: 11 }}
-                    formatter={(v: number, n: string) => [`₹${(v ?? 0).toFixed(2)} Cr`, n]} />
-                  <Legend wrapperStyle={{ fontSize: 10, color: '#64748B', paddingTop: 6 }} />
-                  <Line isAnimationActive={false} type="monotone" dataKey="cur"  name={trendResp?.cur_fy ?? 'Current FY'}  stroke="#1565C0" strokeWidth={2.5} dot={{ r: 2 }} activeDot={{ r: 4 }} connectNulls />
-                  <Line isAnimationActive={false} type="monotone" dataKey="prev" name={trendResp?.prev_fy ?? 'Previous FY'} stroke="#94A3B8" strokeWidth={1.8} strokeDasharray="5 3" dot={{ r: 2 }} connectNulls />
-                </LineChart>
-              </ResponsiveContainer>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={trendData} margin={{ top: 8, right: 16, left: 0, bottom: 4 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.05)" />
-                  <XAxis dataKey="period" tick={{ fill: '#64748B', fontSize: 10 }} axisLine={{ stroke: 'rgba(0,0,0,0.1)' }} tickLine={false}
-                    interval={trendFreq === 'day' ? Math.max(0, Math.floor(trendData.length / 12) - 1) : 0} />
-                  <YAxis tick={{ fill: '#1565C0', fontSize: 10 }} axisLine={false} tickLine={false} />
-                  <RTooltip
-                    contentStyle={{ background: '#fff', border: '1px solid rgba(0,0,0,0.1)', borderRadius: 8, fontSize: 11 }}
-                    formatter={(v: number) => [`₹${(v ?? 0).toFixed(2)} Cr`, 'Amount']}
-                  />
-                  <Line isAnimationActive={false} type="monotone" dataKey="amount" name="Amount (₹ Cr)" stroke="#1565C0" strokeWidth={2.5} dot={trendFreq === 'day' ? false : { r: 2.5 }} activeDot={{ r: 4 }} />
-                </LineChart>
-              </ResponsiveContainer>
-            )}
-          </Box>
-        </Paper>
       </Box>
+
+      {/* Disbursement is a point-in-time event, unaffected by write-off status,
+          so the trend is fixed to one view (no W/O toggle); AP#1/AP#2 drive it. */}
+      <TrendSection title="Trend — Disbursement" portfolio="with" ap1={ap1} ap2={ap2}
+        measures={[{ key: 'disb_amount', label: '₹ Disbursement', format: 'inr' }, { key: 'disb_count', label: '# Disbursement', format: 'num' }]} />
     </Box>
   )
 }

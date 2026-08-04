@@ -17,6 +17,9 @@ VALID_DIMS = {
     # Geography
     "business_segment", "zone_name", "cluster_name", "region_name",
     "area_name", "branch_name", "state_id", "district_id",
+    # "<id> - <NAME>" display forms of the above, plus the loan officer
+    "zone_label", "cluster_label", "region_label", "area_label",
+    "branch_label", "lo_name",
     # Product / Status
     "prod_classification", "curr_od_status", "dpd_bucket",
     "od_movement_status", "bucket_movement", "loan_status", "loan_source",
@@ -34,6 +37,25 @@ def _scope(df: pd.DataFrame, user: dict) -> pd.DataFrame:
     return df
 
 
+# "<id> - <NAME>" display column → the plain column to fall back on when the
+# report table predates dba_add_aum_labels.sql.
+LABEL_FALLBACK = {
+    "zone_label":    "zone_name",
+    "cluster_label": "cluster_name",
+    "region_label":  "region_name",
+    "area_label":    "area_name",
+    "branch_label":  "branch_name",
+    "lo_name":       "lo_id",
+}
+
+
+def _dim(df: pd.DataFrame, col: str) -> str:
+    """Resolve a requested dimension to one that exists in this table."""
+    if col in df.columns:
+        return col
+    return LABEL_FALLBACK.get(col, col)
+
+
 def _vals(raw: Optional[str]) -> list[str]:
     if not raw or raw == "ALL":
         return []
@@ -45,6 +67,20 @@ def _multi(df: pd.DataFrame, col: str, raw: Optional[str]) -> pd.DataFrame:
     if vals and col in df.columns:
         df = df[df[col].astype(str).isin(vals)]
     return df
+
+
+def _multi_lo(df: pd.DataFrame, raw: Optional[str]) -> pd.DataFrame:
+    """Loan-officer filter.
+
+    The slicer shows "<lo_id> - <NAME>", but matching happens on lo_id: the id is
+    the stable key and it is present in every report table, whereas lo_name is
+    only on rpt_aum_status. Bare ids are accepted too.
+    """
+    vals = _vals(raw)
+    if not vals or "lo_id" not in df.columns:
+        return df
+    ids = {v.split(" - ", 1)[0].strip() for v in vals}
+    return df[df["lo_id"].astype(str).str.strip().isin(ids)]
 
 
 def _hier_filter(
@@ -68,7 +104,9 @@ def _hier_filter(
     lender: Optional[str] = None,
     caste: Optional[str] = None,
     religion: Optional[str] = None,
+    lo: Optional[str] = None,
 ) -> pd.DataFrame:
+    df = _multi_lo(df, lo)
     df = _multi(df, "zone_name",          zone)
     df = _multi(df, "cluster_name",       cluster)
     df = _multi(df, "region_name",        region)
@@ -103,7 +141,17 @@ def _segment_filter(df: pd.DataFrame, segment: str, loan_source: str) -> pd.Data
 
 
 def _active_set(df: pd.DataFrame, loan_status: Optional[str]) -> pd.DataFrame:
-    """Current Outstanding = Active + Death + Write-off. loan_status slicer narrows if provided."""
+    """Current Outstanding = Active + Death + Write-off. loan_status slicer narrows if provided.
+
+    rpt_aum_status also carries movement-only loans (on-book at prev month-end but
+    closed during the current month) purely for OD Status / Bucket Movement. They are
+    always dropped here so the live book and its counts are unchanged. Keyed on
+    open_now — loan_status alone is not enough, because a written-off loan that closed
+    this month is (correctly) classified 'Write-off', not 'Closed'."""
+    if "open_now" in df.columns:
+        df = df[df["open_now"].fillna(True).astype(bool)]
+    elif "loan_status" in df.columns:          # pre-migration fallback
+        df = df[df["loan_status"].astype(str) != "Closed"]
     if _vals(loan_status) and "loan_status" in df.columns:
         return df[df["loan_status"].astype(str).isin(_vals(loan_status))]
     return df
@@ -120,10 +168,23 @@ def _group_agg(df: pd.DataFrame, cols: list[str]) -> pd.DataFrame:
     )
 
 
+def _label(v) -> str:
+    """Render a group key as its slicer-option string.
+
+    iterrows() returns each row as a single Series, so an integer dimension
+    (cycle_no) is upcast to float alongside the float measures and would render
+    as '1.0' — which then matches no slicer option and filters to zero. Keeping
+    integral floats as ints makes table labels round-trip through the filters.
+    """
+    if isinstance(v, float) and v.is_integer():
+        return str(int(v))
+    return str(v)
+
+
 def _to_row(r, name_col: str, name2_col: Optional[str] = None) -> dict:
     pos = float(r["pos"])
     row = {
-        "name":  str(r[name_col]),
+        "name":  _label(r[name_col]),
         "pos":   pos,
         "loans": int(r["loans"]),
         "par0_pct":  round(float(r["par0"])  / pos * 100, 2) if pos else 0,
@@ -132,7 +193,7 @@ def _to_row(r, name_col: str, name2_col: Optional[str] = None) -> dict:
         "par90_pct": round(float(r["par90"]) / pos * 100, 2) if pos else 0,
     }
     if name2_col:
-        row["name2"] = str(r[name2_col])
+        row["name2"] = _label(r[name2_col])
     return row
 
 
@@ -165,6 +226,7 @@ def aum_status(
     lender: Optional[str] = Query(None),
     caste: Optional[str] = Query(None),
     religion: Optional[str] = Query(None),
+    lo: Optional[str] = Query(None),
     user: dict = Depends(get_current_user),
 ):
     df = _scope(read_report("rpt_aum_status"), user)
@@ -172,7 +234,7 @@ def aum_status(
         return []
     df = _segment_filter(df, segment, loan_source)
     df = _active_set(df, loan_status)
-    df = _hier_filter(df, zone, cluster, region, area, branch, prod_class, od_status, od_bucket, od_movement, bucket_movement, branch_state, district, disb_year, cycle, purpose, facility, lender, caste, religion)
+    df = _hier_filter(df, zone, cluster, region, area, branch, prod_class, od_status, od_bucket, od_movement, bucket_movement, branch_state, district, disb_year, cycle, purpose, facility, lender, caste, religion, lo=lo)
     return df.fillna("").to_dict("records")
 
 
@@ -200,6 +262,7 @@ def aum_kpis(
     lender: Optional[str] = Query(None),
     caste: Optional[str] = Query(None),
     religion: Optional[str] = Query(None),
+    lo: Optional[str] = Query(None),
     user: dict = Depends(get_current_user),
 ):
     df = _scope(read_report("rpt_aum_status"), user)
@@ -207,7 +270,7 @@ def aum_kpis(
         return {}
 
     df = _segment_filter(df, segment, loan_source)
-    df = _hier_filter(df, zone, cluster, region, area, branch, prod_class, od_status, od_bucket, od_movement, bucket_movement, branch_state, district, disb_year, cycle, purpose, facility, lender, caste, religion)
+    df = _hier_filter(df, zone, cluster, region, area, branch, prod_class, od_status, od_bucket, od_movement, bucket_movement, branch_state, district, disb_year, cycle, purpose, facility, lender, caste, religion, lo=lo)
     base = _active_set(df, loan_status)
 
     total_pos   = float(base["total_pos"].sum())
@@ -261,6 +324,7 @@ def aum_segment_summary(
     lender: Optional[str] = Query(None),
     caste: Optional[str] = Query(None),
     religion: Optional[str] = Query(None),
+    lo: Optional[str] = Query(None),
     user: dict = Depends(get_current_user),
 ):
     df = _scope(read_report("rpt_aum_status"), user)
@@ -268,7 +332,7 @@ def aum_segment_summary(
         return []
 
     df = _segment_filter(df, segment, loan_source)
-    df = _hier_filter(df, zone, cluster, region, area, branch, prod_class, od_status, od_bucket, od_movement, bucket_movement, branch_state, district, disb_year, cycle, purpose, facility, lender, caste, religion)
+    df = _hier_filter(df, zone, cluster, region, area, branch, prod_class, od_status, od_bucket, od_movement, bucket_movement, branch_state, district, disb_year, cycle, purpose, facility, lender, caste, religion, lo=lo)
     active = _active_set(df, loan_status)
 
     seg_col = "business_segment" if "business_segment" in active.columns else "loan_source"
@@ -320,6 +384,7 @@ def aum_group_summary(
     lender: Optional[str] = Query(None),
     caste: Optional[str] = Query(None),
     religion: Optional[str] = Query(None),
+    lo: Optional[str] = Query(None),
     user: dict = Depends(get_current_user),
 ):
     """Aggregate AUM by one or two dimensions (AP#1 × AP#2).
@@ -333,9 +398,13 @@ def aum_group_summary(
         return []
 
     df = _segment_filter(df, segment, loan_source)
-    df = _hier_filter(df, zone, cluster, region, area, branch, prod_class, od_status, od_bucket, od_movement, bucket_movement, branch_state, district, disb_year, cycle, purpose, facility, lender, caste, religion)
+    df = _hier_filter(df, zone, cluster, region, area, branch, prod_class, od_status, od_bucket, od_movement, bucket_movement, branch_state, district, disb_year, cycle, purpose, facility, lender, caste, religion, lo=lo)
     base = _active_set(df, loan_status)
 
+    # Label dimensions fall back to their plain column until the report table has
+    # been migrated (dba_add_aum_labels.sql), so the page never goes blank.
+    g1 = _dim(base, g1)
+    g2 = _dim(base, g2) if g2 else None
     if g1 not in base.columns:
         return []
 
@@ -379,6 +448,7 @@ def bucket_by_branch(
     lender: Optional[str] = Query(None),
     caste: Optional[str] = Query(None),
     religion: Optional[str] = Query(None),
+    lo: Optional[str] = Query(None),
     top_n: int = Query(15),
     user: dict = Depends(get_current_user),
 ):
@@ -388,7 +458,13 @@ def bucket_by_branch(
 
     active = _active_set(df, loan_status)
     active = _segment_filter(active, segment, loan_source)
-    active = _hier_filter(active, zone, cluster, region, area, branch, prod_class, od_status, od_bucket, bucket_movement, branch_state, district, disb_year, cycle)
+    active = _hier_filter(active, zone=zone, cluster=cluster, region=region, area=area,
+                          branch=branch, prod_class=prod_class, od_status=od_status,
+                          od_bucket=od_bucket, od_movement=od_movement,
+                          bucket_movement=bucket_movement, branch_state=branch_state,
+                          district=district, disb_year=disb_year, cycle=cycle,
+                          purpose=purpose, facility=facility, lender=lender,
+                          caste=caste, religion=religion, lo=lo)
 
     top = (active.groupby("branch_name")["total_pos"].sum()
            .nlargest(top_n).index.tolist())
@@ -424,6 +500,7 @@ def par_by_branch(
     lender: Optional[str] = Query(None),
     caste: Optional[str] = Query(None),
     religion: Optional[str] = Query(None),
+    lo: Optional[str] = Query(None),
     top_n: int = Query(15),
     user: dict = Depends(get_current_user),
 ):
@@ -433,7 +510,13 @@ def par_by_branch(
 
     active = _active_set(df, loan_status)
     active = _segment_filter(active, segment, loan_source)
-    active = _hier_filter(active, zone, cluster, region, area, branch, prod_class, od_status, od_bucket, bucket_movement, branch_state, district, disb_year, cycle)
+    active = _hier_filter(active, zone=zone, cluster=cluster, region=region, area=area,
+                          branch=branch, prod_class=prod_class, od_status=od_status,
+                          od_bucket=od_bucket, od_movement=od_movement,
+                          bucket_movement=bucket_movement, branch_state=branch_state,
+                          district=district, disb_year=disb_year, cycle=cycle,
+                          purpose=purpose, facility=facility, lender=lender,
+                          caste=caste, religion=religion, lo=lo)
 
     grp = active.groupby("branch_name", as_index=False).agg(
         total_pos=("total_pos", "sum"),
