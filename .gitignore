@@ -62,6 +62,16 @@ pipeline/queries/_tmp_*.sql
 # ── TypeScript build cache ────────────────────────────────
 *.tsbuildinfo
 
+# ── AI agent tooling (not needed to deploy the dashboard) ─
+.claude/
+
+# ── One-off DBA migration scripts (already applied to prod DB) ──
+/dba_*.sql
+
+# ── Superseded local scheduling (pipeline now scheduled via cron on server) ──
+/scheduler.py
+/run_daily_pipeline.bat
+
 # ── OS cruft ──────────────────────────────────────────────
 .DS_Store
 Thumbs.db
