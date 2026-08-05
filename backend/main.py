@@ -15,6 +15,7 @@ from core.db import init_users_db
 from auth.deps import report_gate
 from auth.routes import router as auth_router, _hash, users_conn
 from api.aum import router as aum_router
+from api.aml import router as aml_router
 from api.collection import router as collection_router
 from api.disbursement import router as disbursement_router
 from api.ageing import router as ageing_router
@@ -22,6 +23,8 @@ from api.bucket_movement import router as bucket_movement_router
 from api.od_status import router as od_status_router
 from api.dq_category import router as dq_category_router
 from api.pos_par import router as pos_par_router
+from api.trend import router as trend_router
+from api.report_summary import router as report_summary_router
 from api.writeoff import router as writeoff_router
 from api.filters import router as filters_router
 from api.operations import router as operations_router
@@ -63,6 +66,7 @@ app.include_router(auth_router, prefix="/auth", tags=["Auth"])
 # of reports enabled for their account (see core/reports_catalog.py).
 _gated = [Depends(report_gate)]
 app.include_router(aum_router, prefix="/api", tags=["AUM"], dependencies=_gated)
+app.include_router(aml_router, prefix="/api", tags=["AML"], dependencies=_gated)
 app.include_router(collection_router, prefix="/api", tags=["Collection"], dependencies=_gated)
 app.include_router(disbursement_router, prefix="/api", tags=["Disbursement"], dependencies=_gated)
 app.include_router(ageing_router, prefix="/api", tags=["Ageing"], dependencies=_gated)
@@ -70,6 +74,8 @@ app.include_router(bucket_movement_router, prefix="/api", tags=["Bucket Movement
 app.include_router(od_status_router, prefix="/api", tags=["OD Status"], dependencies=_gated)
 app.include_router(dq_category_router, prefix="/api", tags=["DQ Category"], dependencies=_gated)
 app.include_router(pos_par_router, prefix="/api", tags=["POS & PAR"], dependencies=_gated)
+app.include_router(trend_router, prefix="/api", tags=["Trend"], dependencies=_gated)
+app.include_router(report_summary_router, prefix="/api", tags=["Report Summary"], dependencies=_gated)
 app.include_router(writeoff_router, prefix="/api", tags=["Write-Off"], dependencies=_gated)
 app.include_router(filters_router, prefix="/api", tags=["Filters"], dependencies=_gated)
 app.include_router(operations_router, prefix="/api", tags=["Operations"], dependencies=_gated)

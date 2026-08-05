@@ -24,6 +24,7 @@ import { api } from '../api/client'
 import { KpiCard } from '../components/KpiCard'
 import { useSlicerParams } from '../store/filterStore'
 import type { AumKpis } from '../api/types'
+import { TrendSection } from '../components/TrendSection'
 
 const SEGMENT_COLORS: Record<string, string> = {
   IEL: '#1565C0', JLG: '#16A34A', LAP: '#7C3AED',
@@ -33,11 +34,15 @@ const PRODUCT_PALETTE = ['#1565C0', '#16A34A', '#7C3AED', '#D97706', '#DC2626', 
 // ── 23 analysis parameters (AP#1 + AP#2 — mirrors Excel "Analysis Parameters") ──
 const DIM_OPTIONS = [
   { value: 'business_segment',    label: 'Business Segment'       },
-  { value: 'zone_name',           label: 'Zone'                   },
-  { value: 'cluster_name',        label: 'Cluster'                },
-  { value: 'region_name',         label: 'Region'                 },
-  { value: 'area_name',           label: 'Unit'                   },
-  { value: 'branch_name',         label: 'Branch ID & Name'       },
+  // Hierarchy dims use the "<id> - <NAME>" label columns, matching the reference
+  // workbook (its slicer is "BRANCH ID & NAME"). They fall back to the plain
+  // name server-side until dba_add_aum_labels.sql has been applied.
+  { value: 'zone_label',          label: 'Zone ID & Name'         },
+  { value: 'cluster_label',       label: 'Cluster ID & Name'      },
+  { value: 'region_label',        label: 'Region ID & Name'       },
+  { value: 'area_label',          label: 'Unit ID & Name'         },
+  { value: 'branch_label',        label: 'Branch ID & Name'       },
+  { value: 'lo_name',             label: 'LO Name (with ID)'      },
   { value: 'state_id',            label: 'Branch State'           },
   { value: 'district_id',         label: 'District'               },
   { value: 'prod_classification', label: 'Prod. Classification'   },
@@ -59,11 +64,12 @@ const AP2_OPTIONS = [{ value: 'none', label: '— None —' }, ...DIM_OPTIONS]
 // Chart dimension choices — only parameters that make sense as chart axes
 const CHART_DIM_OPTIONS = [
   { value: 'business_segment',    label: 'Business Segment' },
-  { value: 'zone_name',           label: 'Zone'             },
-  { value: 'cluster_name',        label: 'Cluster'          },
-  { value: 'region_name',         label: 'Region'           },
-  { value: 'area_name',           label: 'Unit'             },
-  { value: 'branch_name',         label: 'Branch'           },
+  { value: 'zone_label',          label: 'Zone'             },
+  { value: 'cluster_label',       label: 'Cluster'          },
+  { value: 'region_label',        label: 'Region'           },
+  { value: 'area_label',          label: 'Unit'             },
+  { value: 'branch_label',        label: 'Branch'           },
+  { value: 'lo_name',             label: 'Loan Officer'     },
   { value: 'state_id',            label: 'Branch State'     },
   { value: 'prod_classification', label: 'Prod. Class'      },
   { value: 'dpd_bucket',          label: 'OD Bucket'        },
@@ -130,9 +136,6 @@ export function AumStatus() {
   const [ap2, setAp2] = useState('none')
   const [includeWO, setIncludeWO] = useState(true)
   const [chartDim, setChartDim] = useState('business_segment')
-  const [trendFreq, setTrendFreq] = useState<'month' | 'quarter' | 'year'>('month')
-  const [trendFy, setTrendFy] = useState('')      // '' = latest FY
-  const [trendYoy, setTrendYoy] = useState(false)
 
   const slicerParams = useSlicerParams()
 
@@ -160,17 +163,6 @@ export function AumStatus() {
   const { data: productRows = [] } = useQuery<GroupRow[]>({
     queryKey: ['aum-by-dim', chartDim, params],
     queryFn: () => api.get('/api/aum/group-summary', { params: { ...params, group_by: chartDim } }).then((r) => r.data),
-  })
-  // Chart 2 data — AUM trend on the Indian fiscal calendar (FY select + YoY)
-  const { data: trendResp } = useQuery<TrendResp>({
-    queryKey: ['aum-trend', trendFreq, trendFy, trendYoy],
-    queryFn: () => api.get('/api/aum/trend', {
-      params: {
-        freq: trendFreq,
-        ...(trendFy ? { fy: trendFy } : {}),
-        ...(trendYoy && trendFreq !== 'year' ? { yoy: 1 } : {}),
-      },
-    }).then((r) => r.data),
   })
   const { data: refreshData } = useQuery<{ refresh: string }>({
     queryKey: ['aum-refresh'],
@@ -203,28 +195,6 @@ export function AumStatus() {
       .sort((a, b) => b.pos - a.pos)
       .slice(0, 15),
   [productRows])
-
-  const trendPoints = trendResp?.points ?? []
-  const trendFys = trendResp?.fys ?? []
-  const isYoy = trendYoy && trendFreq !== 'year' && trendPoints.some((p) => 'cur' in p)
-
-  const trendData = useMemo(() => {
-    if (isYoy) {
-      return trendPoints.map((t) => ({
-        period:  t.period,
-        cur:     t.cur  != null ? +(t.cur  / 1e7).toFixed(2) : null,
-        prev:    t.prev != null ? +(t.prev / 1e7).toFixed(2) : null,
-        yoy_pct: t.yoy_pct,
-      }))
-    }
-    return trendPoints.map((t) => ({
-      period: t.period,
-      pos:    +((t.pos ?? 0) / 1e7).toFixed(2),
-      loans:  t.loans ?? 0,
-      growth: t.growth ?? 0,
-    }))
-  }, [trendPoints, isYoy])
-
 
   const ap1Label = DIM_OPTIONS.find((o) => o.value === ap1)?.label ?? 'Segment'
   const ap2Label = DIM_OPTIONS.find((o) => o.value === ap2)?.label ?? ''
@@ -357,67 +327,17 @@ export function AumStatus() {
           </Box>
         </Paper>
 
-        <Paper sx={{ overflow: 'hidden' }}>
-          <Box sx={{
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1, flexWrap: 'wrap',
-            px: 2.5, py: 1, borderBottom: '1px solid rgba(0,0,0,0.06)', background: '#FAFBFF',
-          }}>
-            <Box sx={{ fontWeight: 700, fontSize: '0.85rem', color: '#1E293B' }}>
-              AUM Trend {isYoy ? `— ${trendResp?.cur_fy} vs ${trendResp?.prev_fy}` : '(₹ Cr)'}
-            </Box>
-            <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
-              <FormControl size="small" sx={{ minWidth: 84 }}>
-                <Select value={trendFy} onChange={(e) => setTrendFy(e.target.value)} displayEmpty
-                  disabled={trendFreq === 'year'}
-                  sx={{ fontSize: '0.7rem', height: 24 }}>
-                  <MenuItem value="" sx={{ fontSize: '0.7rem' }}>Latest FY</MenuItem>
-                  {trendFys.map((f) => <MenuItem key={f} value={f} sx={{ fontSize: '0.7rem' }}>{f}</MenuItem>)}
-                </Select>
-              </FormControl>
-              <ToggleButtonGroup value={trendFreq} exclusive size="small"
-                onChange={(_, v) => { if (v) setTrendFreq(v) }} sx={{ height: 24 }}>
-                <ToggleButton value="month"   sx={{ px: 1.1, fontSize: '0.66rem', height: 24 }}>Month</ToggleButton>
-                <ToggleButton value="quarter" sx={{ px: 1.1, fontSize: '0.66rem', height: 24 }}>Quarter</ToggleButton>
-                <ToggleButton value="year"    sx={{ px: 1.1, fontSize: '0.66rem', height: 24 }}>Year</ToggleButton>
-              </ToggleButtonGroup>
-              <ToggleButton value="yoy" selected={trendYoy && trendFreq !== 'year'} size="small"
-                disabled={trendFreq === 'year'}
-                onChange={() => setTrendYoy((v) => !v)}
-                sx={{ px: 1.2, fontSize: '0.66rem', height: 24, fontWeight: 700 }}>
-                YoY
-              </ToggleButton>
-            </Box>
-          </Box>
-          <Box sx={{ p: 2, height: 300 }}>
-            {/* Two complete chart variants — recharts mishandles conditional children */}
-            {isYoy ? (
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={trendData} margin={{ top: 8, right: 16, left: 0, bottom: 4 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.05)" />
-                  <XAxis dataKey="period" tick={{ fill: '#64748B', fontSize: 10 }} axisLine={{ stroke: 'rgba(0,0,0,0.1)' }} tickLine={false} interval={0} />
-                  <YAxis tick={{ fill: '#64748B', fontSize: 10 }} axisLine={false} tickLine={false} />
-                  <RTooltip contentStyle={{ background: '#fff', border: '1px solid rgba(0,0,0,0.1)', borderRadius: 8, fontSize: 11 }}
-                    formatter={(v: number, n: string) => [`₹${(v ?? 0).toFixed(2)} Cr`, n]} />
-                  <Legend wrapperStyle={{ fontSize: 10, color: '#64748B', paddingTop: 6 }} />
-                  <Line isAnimationActive={false} type="monotone" dataKey="cur"  name={trendResp?.cur_fy ?? 'Current FY'}  stroke="#1565C0" strokeWidth={2.5} dot={{ r: 2 }} activeDot={{ r: 4 }} connectNulls />
-                  <Line isAnimationActive={false} type="monotone" dataKey="prev" name={trendResp?.prev_fy ?? 'Previous FY'} stroke="#94A3B8" strokeWidth={1.8} strokeDasharray="5 3" dot={{ r: 2 }} connectNulls />
-                </LineChart>
-              </ResponsiveContainer>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={trendData} margin={{ top: 8, right: 16, left: 0, bottom: 4 }}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.05)" />
-                  <XAxis dataKey="period" tick={{ fill: '#64748B', fontSize: 10 }} axisLine={{ stroke: 'rgba(0,0,0,0.1)' }} tickLine={false} interval={0} />
-                  <YAxis tick={{ fill: '#1565C0', fontSize: 10 }} axisLine={false} tickLine={false} />
-                  <RTooltip contentStyle={{ background: '#fff', border: '1px solid rgba(0,0,0,0.1)', borderRadius: 8, fontSize: 11 }}
-                    formatter={(v: number) => [`₹${(v ?? 0).toFixed(2)} Cr`, 'AUM']} />
-                  <Line isAnimationActive={false} type="monotone" dataKey="pos" name="AUM (₹ Cr)" stroke="#1565C0" strokeWidth={2.5} dot={{ r: 2.5 }} activeDot={{ r: 4 }} />
-                </LineChart>
-              </ResponsiveContainer>
-            )}
-          </Box>
-        </Paper>
       </Box>
+
+      {/* One portfolio control for the whole page: the KPI cards, the Analysis
+          Parameter table and the trend all follow `includeWO`. AP#1/AP#2 drive
+          the trend's grouping too, so the trend mirrors the table above it. */}
+      <TrendSection
+        title="Trend — Portfolio (POS / Loans / PAR %)"
+        portfolio={includeWO ? 'with' : 'excl'}
+        ap1={ap1}
+        ap2={ap2}
+        measures={[{ key: 'pos', label: 'POS', format: 'inr' }, { key: 'loans', label: '# Loans', format: 'num' }, { key: 'par0_pct', label: 'PAR>0 %', format: 'pct' }, { key: 'par30_pct', label: 'PAR>30 %', format: 'pct' }, { key: 'par90_pct', label: 'PAR>90 %', format: 'pct' }]} />
     </Box>
   )
 }

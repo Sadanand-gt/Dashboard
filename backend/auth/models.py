@@ -36,7 +36,7 @@ class UserCreate(BaseModel):
     username: str
     password: str
     full_name: str
-    role: str = "analyst"
+    role: str = "officer"
     scope_level: Optional[str] = None      # ho/zone/cluster/region/area/branch/lo
     scope_value: Optional[str] = None      # comma-separated for multi
     reports: Optional[list[str]] = None    # None/[] = all reports allowed

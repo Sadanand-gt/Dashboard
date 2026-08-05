@@ -116,10 +116,11 @@ function aggregate(rows: RawRow[], freq: Freq): AggRow[] {
 
 // ── Time-slab helpers (last N months of monthly data) ─────────────────────────
 const TIME_SLABS = [
-  { label: '3M',  months: 3 },
-  { label: '6M',  months: 6 },
   { label: '12M', months: 12 },
   { label: '24M', months: 24 },
+  { label: '36M', months: 36 },
+  { label: '48M', months: 48 },
+  { label: '60M', months: 60 },
   { label: 'All', months: 0 },
 ]
 
@@ -127,11 +128,16 @@ const TIME_SLABS = [
 export function TrendMonthly() {
   const [freq,     setFreq]     = useState<Freq>('M')
   const [timeSlab, setTimeSlab] = useState('12M')
+  // /api/trend/monthly already accepted portfolio; the page just never sent it,
+  // so this view was pinned to "With W/O" while every trend SECTION offered both.
+  const [portfolio, setPortfolio] = useState<'with' | 'excl'>('with')
   const slicer = useSlicerParams()
 
+  // Full-history monthly series from rpt_trend_full — the same engine behind
+  // every other trend section, with the latest month pinned to the live report.
   const { data: rawRows = [] } = useQuery<RawRow[]>({
-    queryKey: ['trend-monthly', slicer],
-    queryFn: () => api.get('/api/trend-monthly', { params: slicer }).then((r) => r.data),
+    queryKey: ['trend-monthly-full', slicer, portfolio],
+    queryFn: () => api.get('/api/trend/monthly', { params: { ...slicer, portfolio } }).then((r) => r.data),
   })
 
   // Apply time slab filter on raw monthly rows before aggregation
@@ -171,6 +177,22 @@ export function TrendMonthly() {
             <ToggleButton value="M" sx={{ px: 1.5, py: 0.5 }}>Monthly</ToggleButton>
             <ToggleButton value="Q" sx={{ px: 1.5, py: 0.5 }}>Quarterly</ToggleButton>
             <ToggleButton value="Y" sx={{ px: 1.5, py: 0.5 }}>Yearly (FY)</ToggleButton>
+          </ToggleButtonGroup>
+        </Box>
+
+        {/* Portfolio toggle — matches every other report page */}
+        <Box>
+          <Box sx={{ fontSize: '0.62rem', color: '#94A3B8', mb: 0.4, fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>
+            Portfolio
+          </Box>
+          <ToggleButtonGroup
+            value={portfolio}
+            exclusive
+            size="small"
+            onChange={(_, v) => { if (v) setPortfolio(v) }}
+          >
+            <ToggleButton value="with" sx={{ px: 1.5, py: 0.5 }}>With W/O</ToggleButton>
+            <ToggleButton value="excl" sx={{ px: 1.5, py: 0.5 }}>Excl. W/O</ToggleButton>
           </ToggleButtonGroup>
         </Box>
 

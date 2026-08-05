@@ -51,6 +51,20 @@ sheets.txt
 .vscode/
 .idea/
 
+# Generated manual-validation SQL
+pipeline/queries/manual/
+
+# One-off manual database verification scripts
+validation_current_outstanding.sql
+pipeline/queries/_tmp_*.sql
+
+# One-off DBA migration scripts already applied to production
+/dba_*.sql
+
+# Superseded local scheduling
+/scheduler.py
+/run_daily_pipeline.bat
+
 # OS files
 .DS_Store
 Thumbs.db

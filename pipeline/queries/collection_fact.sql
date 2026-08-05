@@ -32,7 +32,16 @@
 -- =============================================================================
 
 WITH
-
+-- Write-off master, matched on loan_id AND date. loan_id is NOT unique across
+-- sources: every IL loan here also exists in JLG with an earlier disbursement
+-- (customers graduate JLG -> IL). Matching on loan_id alone wrongly kills a
+-- brand-new IL loan whose id was written off in its earlier JLG life, so a
+-- write-off may only apply to a loan that already existed when it was written
+-- off. A NULL writeoff_date falls back to id-only matching.
+wo_master AS (
+    SELECT v.loan_id::bigint AS loan_id, v.wo_date::date AS wo_date
+    FROM (VALUES {wo_pairs}) AS v(loan_id, wo_date)
+),
 -- T-1 = current_date - 1 (matches the .pbit TODAY()-1). If collection data for T-1
 -- is not yet loaded that is a warehouse/DBA data-freshness issue, not a report-logic
 -- one — the logic here is not adjusted for it.  Advance collection is handled per the
@@ -40,15 +49,15 @@ WITH
 ref AS (
     SELECT
         (current_date - interval '1 day')::date                                            AS yesterday,
-        date_trunc('month', current_date)::date                                            AS curr_month_start,
-        (date_trunc('month', current_date) - interval '1 day')::date                       AS prev_month_end,
-        date_trunc('month', current_date - interval '1 month')::date                       AS prev_month_start,
-        (date_trunc('month', current_date - interval '1 month') - interval '1 day')::date  AS prev_prev_month_end,
+        date_trunc('month', current_date - 1)::date                                            AS curr_month_start,
+        (date_trunc('month', current_date - 1) - interval '1 day')::date                       AS prev_month_end,
+        date_trunc('month', current_date - 1 - interval '1 month')::date                       AS prev_month_start,
+        (date_trunc('month', current_date - 1 - interval '1 month') - interval '1 day')::date  AS prev_prev_month_end,
         -- PMSD cutoff: same day-of-month last month, capped at prev_month_end
         LEAST(
-            (date_trunc('month', current_date - interval '1 month')
+            (date_trunc('month', current_date - 1 - interval '1 month')
              + (extract(day from current_date - interval '1 day')::int - 1) * interval '1 day')::date,
-            (date_trunc('month', current_date) - interval '1 day')::date
+            (date_trunc('month', current_date - 1) - interval '1 day')::date
         )                                                                                  AS pmsd_cutoff
 ),
 
@@ -221,7 +230,13 @@ il_sched AS (
         sum(rs.principal_due + rs.interest_due) FILTER (WHERE rs.demand_date::date > r.prev_month_end AND rs.demand_date::date <= r.yesterday
              AND (lc.closure_date IS NULL OR lc.closure_date::date >= rs.demand_date::date))                                 AS cap_demand_mtd,
         sum(rs.principal_due) FILTER (WHERE rs.demand_date::date <= r.prev_month_end)                                        AS prin_due_eom,
-        sum(rs.interest_due)  FILTER (WHERE rs.demand_date::date <= r.prev_month_end)                                        AS int_due_eom
+        sum(rs.interest_due)  FILTER (WHERE rs.demand_date::date <= r.prev_month_end)                                        AS int_due_eom,
+        -- PMTD mirrors of the MTD cap / opening-advance inputs, shifted one month,
+        -- so PMTD CE is built the SAME way as MTD CE (see il_base.pmtd_collection).
+        sum(rs.principal_due + rs.interest_due) FILTER (WHERE rs.demand_date::date >= r.prev_month_start AND rs.demand_date::date <= r.pmsd_cutoff
+             AND (lc.closure_date IS NULL OR lc.closure_date::date >= rs.demand_date::date))                                 AS cap_demand_pmtd,
+        sum(rs.principal_due) FILTER (WHERE rs.demand_date::date <= r.prev_prev_month_end)                                   AS prin_due_ppm,
+        sum(rs.interest_due)  FILTER (WHERE rs.demand_date::date <= r.prev_prev_month_end)                                   AS int_due_ppm
     FROM public.repayment_schedule_il rs
     CROSS JOIN ref r
     LEFT JOIN il_closure lc ON lc.loan_id = rs.loan_id
@@ -239,7 +254,11 @@ il_detail AS (
         -- and principal/interest collected up to prev month-end (opening advance).
         sum(rd.principal_collected + rd.interest_collected) FILTER (WHERE rd.collection_date_time::date > r.prev_month_end AND rd.collection_date_time::date <= r.yesterday) AS mtd_coll_pi,
         sum(rd.principal_collected) FILTER (WHERE rd.collection_date_time::date <= r.prev_month_end)                                    AS prin_coll_eom,
-        sum(rd.interest_collected)  FILTER (WHERE rd.collection_date_time::date <= r.prev_month_end)                                    AS int_coll_eom
+        sum(rd.interest_collected)  FILTER (WHERE rd.collection_date_time::date <= r.prev_month_end)                                    AS int_coll_eom,
+        -- PMTD mirrors of the MTD numerator inputs, shifted one month.
+        sum(rd.principal_collected + rd.interest_collected) FILTER (WHERE rd.collection_date_time::date >= r.prev_month_start AND rd.collection_date_time::date <= r.pmsd_cutoff) AS pmtd_coll_pi,
+        sum(rd.principal_collected) FILTER (WHERE rd.collection_date_time::date <= r.prev_prev_month_end)                               AS prin_coll_ppm,
+        sum(rd.interest_collected)  FILTER (WHERE rd.collection_date_time::date <= r.prev_prev_month_end)                               AS int_coll_ppm
     FROM public.repayment_detail_il rd
     CROSS JOIN ref r
     LEFT JOIN il_sched s ON s.loan_id = rd.loan_id
@@ -260,7 +279,12 @@ jlg_sched AS (
         sum(rs.principal_due + rs.interest_due) FILTER (WHERE rs.demand_date::date > r.prev_month_end AND rs.demand_date::date <= r.yesterday
              AND (lc.closure_date IS NULL OR lc.closure_date::date >= rs.demand_date::date))                                 AS cap_demand_mtd,
         sum(rs.principal_due) FILTER (WHERE rs.demand_date::date <= r.prev_month_end)                                        AS prin_due_eom,
-        sum(rs.interest_due)  FILTER (WHERE rs.demand_date::date <= r.prev_month_end)                                        AS int_due_eom
+        sum(rs.interest_due)  FILTER (WHERE rs.demand_date::date <= r.prev_month_end)                                        AS int_due_eom,
+        -- PMTD mirrors — see the IL block above.
+        sum(rs.principal_due + rs.interest_due) FILTER (WHERE rs.demand_date::date >= r.prev_month_start AND rs.demand_date::date <= r.pmsd_cutoff
+             AND (lc.closure_date IS NULL OR lc.closure_date::date >= rs.demand_date::date))                                 AS cap_demand_pmtd,
+        sum(rs.principal_due) FILTER (WHERE rs.demand_date::date <= r.prev_prev_month_end)                                   AS prin_due_ppm,
+        sum(rs.interest_due)  FILTER (WHERE rs.demand_date::date <= r.prev_prev_month_end)                                   AS int_due_ppm
     FROM public.repayment_schedule rs
     CROSS JOIN ref r
     LEFT JOIN jlg_closure lc ON lc.loan_id = rs.loan_id
@@ -276,7 +300,11 @@ jlg_detail AS (
         sum(rd.amount_collected) FILTER (WHERE rd.collection_date_time::date >= r.prev_month_start AND rd.collection_date_time::date <= r.pmsd_cutoff) AS pmtd_collection,
         sum(rd.principal_collected + rd.interest_collected) FILTER (WHERE rd.collection_date_time::date > r.prev_month_end AND rd.collection_date_time::date <= r.yesterday) AS mtd_coll_pi,
         sum(rd.principal_collected) FILTER (WHERE rd.collection_date_time::date <= r.prev_month_end)                                    AS prin_coll_eom,
-        sum(rd.interest_collected)  FILTER (WHERE rd.collection_date_time::date <= r.prev_month_end)                                    AS int_coll_eom
+        sum(rd.interest_collected)  FILTER (WHERE rd.collection_date_time::date <= r.prev_month_end)                                    AS int_coll_eom,
+        -- PMTD mirrors — see the IL block above.
+        sum(rd.principal_collected + rd.interest_collected) FILTER (WHERE rd.collection_date_time::date >= r.prev_month_start AND rd.collection_date_time::date <= r.pmsd_cutoff) AS pmtd_coll_pi,
+        sum(rd.principal_collected) FILTER (WHERE rd.collection_date_time::date <= r.prev_prev_month_end)                               AS prin_coll_ppm,
+        sum(rd.interest_collected)  FILTER (WHERE rd.collection_date_time::date <= r.prev_prev_month_end)                               AS int_coll_ppm
     FROM public.repayment_detail rd
     CROSS JOIN ref r
     LEFT JOIN jlg_sched s ON s.loan_id = rd.loan_id
@@ -296,7 +324,8 @@ il_base AS (
              THEN 'LAP' ELSE 'IEL' END               AS business_segment,
         la.loan_id, la.branch_id,
         la.loan_officer::varchar                      AS lo_id,
-        CASE WHEN la.loan_id IN ({wo_ids}) OR la.status = 'W'
+        CASE WHEN la.status = 'W' OR (w.loan_id IS NOT NULL
+                  AND (w.wo_date IS NULL OR la.disbursement_date::date <= w.wo_date))
              THEN 'W' ELSE la.status END              AS raw_status,
         coalesce(la.dpd,0)                            AS live_dpd,
         coalesce(d.dpd,0)                             AS eom_dpd,
@@ -320,14 +349,27 @@ il_base AS (
         coalesce(s.pmsd_demand,0)      AS pmsd_demand,
         coalesce(dt.pmsd_collection,0) AS pmsd_collection,
         coalesce(s.pmtd_demand,0)      AS pmtd_demand,
-        coalesce(dt.pmtd_collection,0) AS pmtd_collection
+        -- PMTD collection built the SAME way as mtd_collection above (.pbit
+        -- [Collection], shifted one month): per-loan LEAST(P+I collected in the
+        -- PMTD window + opening advance as at prev-prev month-end, capped demand).
+        -- It used to be the RAW amount_collected sum — uncapped, no advance, and
+        -- including charges — so PMTD CE was structurally higher than MTD CE and
+        -- the two were not comparable (97.70% vs 90.05% on 2026-08-04).
+        LEAST(
+            coalesce(dt.pmtd_coll_pi,0)
+              + greatest(coalesce(dt.prin_coll_ppm,0) - coalesce(s.prin_due_ppm,0), 0)
+              + greatest(coalesce(dt.int_coll_ppm,0)  - coalesce(s.int_due_ppm,0),  0),
+            coalesce(s.cap_demand_pmtd,0)
+        )                              AS pmtd_collection
     FROM public.loan_account_il la
     LEFT JOIN il_dpd d      ON d.loan_id  = la.loan_id
     LEFT JOIN prod_class ipc ON ipc.loan_source='IL' AND ipc.product_id = la.product_id::text
     LEFT JOIN loan_extra ex ON ex.loan_source='IL' AND ex.loan_id = la.loan_id
     LEFT JOIN il_sched  s  ON s.loan_id  = la.loan_id
     LEFT JOIN il_detail dt ON dt.loan_id = la.loan_id
-    WHERE (coalesce(s.t1_demand,0)+coalesce(s.mtd_demand,0)+coalesce(s.pmtd_demand,0)
+    LEFT JOIN wo_master w ON w.loan_id = la.loan_id
+    WHERE la.loan_id >= 10000000                 -- drop junk/test ids (e.g. 1111111)
+      AND (coalesce(s.t1_demand,0)+coalesce(s.mtd_demand,0)+coalesce(s.pmtd_demand,0)
           +coalesce(dt.t1_collection,0)+coalesce(dt.mtd_collection,0)+coalesce(dt.pmtd_collection,0)) > 0
 ),
 jlg_base AS (
@@ -335,7 +377,8 @@ jlg_base AS (
         'JLG' AS loan_source, 'JLG' AS business_segment,
         la.loan_id, cm.branch_id,
         cm.assigned_to::varchar                       AS lo_id,
-        CASE WHEN la.loan_id IN ({wo_ids}) OR la.status = 'W'
+        CASE WHEN la.status = 'W' OR (w.loan_id IS NOT NULL
+                  AND (w.wo_date IS NULL OR la.disbursement_date::date <= w.wo_date))
              THEN 'W' ELSE la.status END              AS raw_status,
         coalesce(la.dpd,0)                            AS live_dpd,
         coalesce(d.dpd,0)                             AS eom_dpd,
@@ -356,7 +399,18 @@ jlg_base AS (
         coalesce(s.pmsd_demand,0)      AS pmsd_demand,
         coalesce(dt.pmsd_collection,0) AS pmsd_collection,
         coalesce(s.pmtd_demand,0)      AS pmtd_demand,
-        coalesce(dt.pmtd_collection,0) AS pmtd_collection
+        -- PMTD collection built the SAME way as mtd_collection above (.pbit
+        -- [Collection], shifted one month): per-loan LEAST(P+I collected in the
+        -- PMTD window + opening advance as at prev-prev month-end, capped demand).
+        -- It used to be the RAW amount_collected sum — uncapped, no advance, and
+        -- including charges — so PMTD CE was structurally higher than MTD CE and
+        -- the two were not comparable (97.70% vs 90.05% on 2026-08-04).
+        LEAST(
+            coalesce(dt.pmtd_coll_pi,0)
+              + greatest(coalesce(dt.prin_coll_ppm,0) - coalesce(s.prin_due_ppm,0), 0)
+              + greatest(coalesce(dt.int_coll_ppm,0)  - coalesce(s.int_due_ppm,0),  0),
+            coalesce(s.cap_demand_pmtd,0)
+        )                              AS pmtd_collection
     FROM public.home_loan_account la
     LEFT JOIN public.home_center_master cm ON cm.center_id = la.center_id
     LEFT JOIN jlg_dpd d      ON d.loan_id  = la.loan_id
@@ -364,7 +418,9 @@ jlg_base AS (
     LEFT JOIN loan_extra ex ON ex.loan_source='JLG' AND ex.loan_id = la.loan_id
     LEFT JOIN jlg_sched  s  ON s.loan_id  = la.loan_id
     LEFT JOIN jlg_detail dt ON dt.loan_id = la.loan_id
-    WHERE (coalesce(s.t1_demand,0)+coalesce(s.mtd_demand,0)+coalesce(s.pmtd_demand,0)
+    LEFT JOIN wo_master w ON w.loan_id = la.loan_id
+    WHERE la.loan_id >= 10000000                 -- drop junk/test ids (e.g. 1111111)
+      AND (coalesce(s.t1_demand,0)+coalesce(s.mtd_demand,0)+coalesce(s.pmtd_demand,0)
           +coalesce(dt.t1_collection,0)+coalesce(dt.mtd_collection,0)+coalesce(dt.pmtd_collection,0)) > 0
 ),
 all_base AS (SELECT * FROM il_base UNION ALL SELECT * FROM jlg_base),

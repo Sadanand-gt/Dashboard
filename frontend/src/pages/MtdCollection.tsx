@@ -21,10 +21,11 @@ import {
   inrUnit, fmtUnit, bucketRank,
   type CollectionRow, type CollectionKpis,
 } from './collectionShared'
+import { TrendSection } from '../components/TrendSection'
 
 export function MtdCollection() {
-  const [ap1, setAp1] = useState('prod_classification')  // Excel default AP#1 = PROD_CLASSIFICATION
-  const [ap2, setAp2] = useState('bucket_movement')      // Excel default AP#2 = BUCKET MOVEMENT
+  const [ap1, setAp1] = useState('business_segment')
+  const [ap2, setAp2] = useState('none')
   const [sortField, setSortField] = useState<keyof CollectionRow>('mtd_demand')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [includeWO, setIncludeWO] = useState(true)
@@ -166,6 +167,11 @@ export function MtdCollection() {
           </Box>
         )}
       </Paper>
+
+      <TrendSection title="Trend — Collection Efficiency"
+        portfolio={includeWO ? 'with' : 'excl'} ap1={ap1} ap2={ap2}
+        measures={[{ key: 'ce_pct', label: 'Monthly CE %', format: 'pct' }, { key: 'reg_ce_pct', label: 'Regular Bucket CE %', format: 'pct' }]} />
+
     </Box>
   )
 }

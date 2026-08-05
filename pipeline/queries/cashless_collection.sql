@@ -17,11 +17,18 @@
 
 WITH
 
+-- Write-off master (loan_id + date). Overrides loan STATUS only — never the
+-- collection figures — exactly as in every other write-off-aware report.
+wo_master AS (
+    SELECT v.loan_id::bigint AS loan_id, v.wo_date::date AS wo_date
+    FROM (VALUES {wo_pairs}) AS v(loan_id, wo_date)
+),
+
 params AS (
     SELECT
         current_date - 1                                               AS yesterday,
-        date_trunc('month', current_date)::date                        AS curr_month_start,
-        (date_trunc('month', current_date) - interval '1 day')::date   AS prev_month_end
+        date_trunc('month', current_date - 1)::date                        AS curr_month_start,
+        (date_trunc('month', current_date - 1) - interval '1 day')::date   AS prev_month_end
 ),
 
 hierarchy AS (
@@ -52,12 +59,25 @@ il_coll AS (
         la.branch_id,
         la.loan_officer::varchar            AS lo_id,
         la.product_id::text                 AS product_id,
-        la.status                           AS loan_status,
+        -- Canonical loan_status LABELS, identical to every other report. This
+        -- table used to emit the raw core codes ('A','X'), which silently broke
+        -- the With / Excl W/O toggle and the shared Loan Status slicer — both
+        -- test for 'Write-off', which a raw 'W' never matched.
+        CASE
+            WHEN la.status = 'W' OR (w.loan_id IS NOT NULL
+                 AND (w.wo_date IS NULL OR la.disbursement_date::date <= w.wo_date))
+                                            THEN 'Write-off'
+            WHEN la.status = 'A'            THEN 'Active'
+            WHEN la.status IN ('D','I')     THEN 'Death'
+            WHEN la.status = 'X'            THEN 'Closed'
+            ELSE la.status
+        END                                 AS loan_status,
         rd.amount_collected,
         rd.coll_pay_mode,
         rd.collection_date_time::date       AS col_date
     FROM public.repayment_detail_il rd
     JOIN public.loan_account_il la ON la.loan_id = rd.loan_id
+    LEFT JOIN wo_master w ON w.loan_id = la.loan_id
     CROSS JOIN params p
     WHERE rd.status = 'A'
       AND rd.collection_date_time::date >= p.curr_month_start

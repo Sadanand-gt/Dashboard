@@ -30,11 +30,11 @@ WITH
 ref AS (
     SELECT
         (current_date - interval '1 day')::date                            AS yesterday,
-        date_trunc('month', current_date)::date                            AS mtd_start,
-        (date_trunc('month', current_date) - interval '1 day')::date       AS pmsd_date,
+        date_trunc('month', current_date - 1)::date                            AS mtd_start,
+        (date_trunc('month', current_date - 1) - interval '1 day')::date       AS pmsd_date,
         -- Previous month same date (for LMSD comparison)
         date(
-            date_trunc('month', current_date) - interval '1 month'
+            date_trunc('month', current_date - 1) - interval '1 month'
         )                                                                   AS lm_month_start
 ),
 
@@ -143,6 +143,7 @@ jlg_disb AS (
     FROM public.home_loan_account la
     JOIN public.home_center_master cm ON cm.center_id = la.center_id
     WHERE la.status = 'A'
+      AND la.loan_id >= 10000000                 -- drop junk/test ids (e.g. 1111111)
       AND la.disbursement_date IS NOT NULL
 ),
 
@@ -213,7 +214,7 @@ il_branch AS (
               AND a.sanction_date <= r.yesterday AND a.is_topup = 0
               THEN a.application_number END)                               AS sanctioned_mtd,
         count(DISTINCT CASE WHEN a.rejection_date > (SELECT prev_month_end FROM
-              (SELECT (date_trunc('month', current_date) - interval '1 day')::date AS prev_month_end) pe)
+              (SELECT (date_trunc('month', current_date - 1) - interval '1 day')::date AS prev_month_end) pe)
               AND a.rejection_date < current_date
               AND a.status = 'XR' AND a.is_topup = 0
               THEN a.application_number END)                               AS rejected_mtd,
@@ -296,7 +297,7 @@ jlg_branch AS (
               AND a.sanction_date <= r.yesterday AND a.is_topup = 0
               THEN a.application_number END)                               AS sanctioned_mtd,
         count(DISTINCT CASE WHEN a.rejection_date > (SELECT prev_month_end FROM
-              (SELECT (date_trunc('month', current_date) - interval '1 day')::date AS prev_month_end) pe)
+              (SELECT (date_trunc('month', current_date - 1) - interval '1 day')::date AS prev_month_end) pe)
               AND a.rejection_date < current_date
               AND a.status = 'XR' AND a.is_topup = 0
               THEN a.application_number END)                               AS rejected_mtd,

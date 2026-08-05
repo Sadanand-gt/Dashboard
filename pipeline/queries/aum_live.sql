@@ -13,6 +13,15 @@
 
 WITH
 
+-- Write-off MASTER (loan_id, wo_date). Overrides a loan's STATUS to 'W' when the
+-- master applies (loan existed at write-off: disbursement_date <= wo_date). Keeps
+-- the universe unchanged — only the displayed status changes, so the Excl-W/O
+-- view (loan_status <> 'Write-off') matches Excel + Current Outstanding.
+wo_master AS (
+    SELECT v.loan_id::bigint AS loan_id, v.wo_date::date AS wo_date
+    FROM (VALUES {wo_pairs}) AS v(loan_id, wo_date)
+),
+
 hierarchy AS (
     SELECT
         bm.branch_id,
@@ -46,8 +55,12 @@ il_loans AS (
         la.product_id::text          AS product_id,
         la.principal_outstanding,
         coalesce(la.dpd, 0)          AS dpd,
-        la.status
+        -- Master overrides status to 'W' (write-off) when the loan existed at write-off
+        CASE WHEN la.status = 'W' OR (w.loan_id IS NOT NULL
+                  AND (w.wo_date IS NULL OR la.disbursement_date::date <= w.wo_date))
+             THEN 'W' ELSE la.status END  AS status
     FROM public.loan_account_il la
+    LEFT JOIN wo_master w ON w.loan_id = la.loan_id
     WHERE la.status IN ('A', 'D', 'I', 'W')
 ),
 
@@ -64,10 +77,15 @@ jlg_loans AS (
         la.product_id::text          AS product_id,
         la.prin_os                   AS principal_outstanding,
         coalesce(la.dpd, 0)          AS dpd,
-        la.status
+        -- Master overrides status to 'W' (write-off) when the loan existed at write-off
+        CASE WHEN la.status = 'W' OR (w.loan_id IS NOT NULL
+                  AND (w.wo_date IS NULL OR la.disbursement_date::date <= w.wo_date))
+             THEN 'W' ELSE la.status END  AS status
     FROM public.home_loan_account la
     JOIN public.home_center_master cm ON cm.center_id = la.center_id
+    LEFT JOIN wo_master w ON w.loan_id = la.loan_id
     WHERE la.status IN ('A', 'D', 'I', 'W')
+      AND la.loan_id >= 10000000                 -- drop junk/test ids (e.g. 1111111)
       AND (la.status != 'W' OR la.prin_os > 0)
       AND NOT EXISTS (
           SELECT 1 FROM public.loan_account_il il
@@ -89,7 +107,15 @@ all_loans AS (
 -- ═════════════════════════════════════════════════════════════════════════════
 SELECT
     al.loan_source,
-    CASE WHEN al.status = 'I' THEN 'D' ELSE al.status END                  AS loan_status,  -- status I is a death case → fold into D
+    -- Canonical labels (match rpt_aum_status + the loan_status slicer options).
+    -- 'I' is a death case → Death. Master/core write-offs → Write-off.
+    CASE al.status
+        WHEN 'A' THEN 'Active'
+        WHEN 'W' THEN 'Write-off'
+        WHEN 'D' THEN 'Death'
+        WHEN 'I' THEN 'Death'
+        ELSE al.status
+    END                                                                    AS loan_status,
     coalesce(h.cluster_name, 'Unassigned') AS cluster_name,
     coalesce(h.region_name,  'Unassigned') AS region_name,
     coalesce(h.area_name,    'Unassigned') AS area_name,

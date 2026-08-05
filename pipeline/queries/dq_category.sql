@@ -4,22 +4,42 @@
 --   asof         = current_date - 1  (= MAX(Dates[MTD To]))
 --   Early cutoff  = EOMONTH(asof, -8) = date_trunc('month',now) - 7 mo - 1 day
 --   Infant cutoff = EOMONTH(asof, -3) = date_trunc('month',now) - 2 mo - 1 day
---   Early eligible  : FIRST_DEMAND_DATE >= Early cutoff   (first came due <= 8 mo ago)
---   Infant eligible : FIRST_DEMAND_DATE >= Infant cutoff  (first came due <= 3 mo ago)
+--   Elig cap      = EOMONTH(asof,  0) = the CURRENT month end (workbook parameter
+--                   "Current Month"; August 2026 Dashboards Update sheet = 31-Aug-26)
+--   Early eligible  : Early cutoff  <= FIRST_DEMAND_DATE <= Elig cap  (current month + past 7)
+--   Infant eligible : Infant cutoff <= FIRST_DEMAND_DATE <= Elig cap  (current month + past 2)
+--   The UPPER bound matters: without it the denominator includes loans whose first
+--   instalment has not fallen due yet. Verified 2026-08-03 against the workbook
+--   (refreshed the same morning, so asof matches): Early 39,047 -> 34,973 vs Excel
+--   34,881; Infant 20,374 -> 16,300 vs Excel 16,291.
 --   *_od           : eligible AND OD_DAYS > 0
 --   DQ %           : POS-weighted = SUM(OUTSTANDING_PRINCIPAL of *_od)
 --                                   / SUM(OUTSTANDING_PRINCIPAL of eligible)
 -- Grain   : aggregated over all analysis-parameter dimensions (both pages read it).
 -- Universe: loan_account_il + home_loan_account, status IN ('A','D','W).
--- Write-off: {wo_ids} overrides loan STATUS only (Portfolio toggle excludes them).
+-- Write-off: wo_master (loan_id + date) overrides loan STATUS only (Portfolio toggle excludes them).
 -- =============================================================================
 
 WITH
+-- Write-off master, matched on loan_id AND date. loan_id is NOT unique across
+-- sources: every IL loan here also exists in JLG with an earlier disbursement
+-- (customers graduate JLG -> IL). Matching on loan_id alone wrongly kills a
+-- brand-new IL loan whose id was written off in its earlier JLG life, so a
+-- write-off may only apply to a loan that already existed when it was written
+-- off. A NULL writeoff_date falls back to id-only matching.
+wo_master AS (
+    SELECT v.loan_id::bigint AS loan_id, v.wo_date::date AS wo_date
+    FROM (VALUES {wo_pairs}) AS v(loan_id, wo_date)
+),
 ref AS (
     SELECT
         (current_date - interval '1 day')::date                                            AS asof,
-        (date_trunc('month', current_date) - interval '7 month' - interval '1 day')::date  AS early_cut,   -- EOMONTH(asof,-8)
-        (date_trunc('month', current_date) - interval '2 month' - interval '1 day')::date  AS infant_cut   -- EOMONTH(asof,-3)
+        (date_trunc('month', current_date - 1) - interval '7 month' - interval '1 day')::date  AS early_cut,   -- EOMONTH(asof,-8)
+        (date_trunc('month', current_date - 1) - interval '2 month' - interval '1 day')::date  AS infant_cut,  -- EOMONTH(asof,-3)
+        -- UPPER bound of the eligibility window = EOMONTH(asof, 0) = the CURRENT
+        -- month end. This is the workbook's "Current Month" parameter (verified:
+        -- August 2026 Dashboards, Update sheet = 2026-08-31).
+        (date_trunc('month', current_date - 1) + interval '1 month' - interval '1 day')::date  AS elig_cap     -- EOMONTH(asof, 0)
 ),
 
 hierarchy AS (
@@ -80,7 +100,8 @@ il_loans AS (
         la.first_demand_date,
         coalesce(la.dpd, 0)                                     AS dpd,
         coalesce(la.principal_outstanding, 0)                  AS pos,
-        CASE WHEN la.loan_id IN ({wo_ids}) OR la.status='W' THEN 'W' ELSE la.status END AS raw_status,
+        CASE WHEN la.status='W' OR (w.loan_id IS NOT NULL
+                  AND (w.wo_date IS NULL OR la.disbursement_date::date <= w.wo_date)) THEN 'W' ELSE la.status END AS raw_status,
         extract(year FROM la.disbursement_date)::text           AS disb_year,
         coalesce(la.cycle::text,'N/A')                          AS cycle_no,
         coalesce(ipc.prod_classification,'Other')               AS prod_classification,
@@ -88,6 +109,7 @@ il_loans AS (
     FROM public.loan_account_il la
     LEFT JOIN il_prod_class ipc ON ipc.product_id = la.product_id::text
     LEFT JOIN il_extra ex ON ex.loan_id = la.loan_id
+    LEFT JOIN wo_master w ON w.loan_id = la.loan_id
     WHERE la.status IN ('A','D','I','W')
 ),
 jlg_loans AS (
@@ -99,7 +121,8 @@ jlg_loans AS (
         la.first_demand_date,
         coalesce(la.dpd, 0)                                     AS dpd,
         coalesce(la.prin_os, 0)                                AS pos,
-        CASE WHEN la.loan_id IN ({wo_ids}) OR la.status='W' THEN 'W' ELSE la.status END AS raw_status,
+        CASE WHEN la.status='W' OR (w.loan_id IS NOT NULL
+                  AND (w.wo_date IS NULL OR la.disbursement_date::date <= w.wo_date)) THEN 'W' ELSE la.status END AS raw_status,
         extract(year FROM la.disbursement_date)::text           AS disb_year,
         coalesce(la.cycle::text,'N/A')                          AS cycle_no,
         coalesce(jpc.prod_classification,'Other')               AS prod_classification,
@@ -108,6 +131,7 @@ jlg_loans AS (
     JOIN public.home_center_master cm ON cm.center_id = la.center_id
     LEFT JOIN jlg_prod_class jpc ON jpc.product_id = la.product_id::text
     LEFT JOIN jlg_extra ex ON ex.loan_id = la.loan_id
+    LEFT JOIN wo_master w ON w.loan_id = la.loan_id
     WHERE la.status IN ('A','D','I','W')
       AND (la.status <> 'W' OR la.prin_os > 0)
       AND NOT EXISTS (
@@ -128,10 +152,17 @@ enriched AS (
              ELSE                                     '360 +' END AS dpd_bucket,
         CASE al.raw_status WHEN 'A' THEN 'Active' WHEN 'D' THEN 'Death' WHEN 'I' THEN 'Death'
              WHEN 'W' THEN 'Write-off' ELSE al.raw_status END       AS loan_status,
+        -- Eligibility is a WINDOW, not a one-sided floor. Without the elig_cap the
+        -- denominator also swept in loans whose FIRST INSTALMENT HAS NOT FALLEN DUE
+        -- YET (8,841 of them on 2026-08-03) — a loan that owes nothing cannot be
+        -- delinquent, so counting it only depresses DQ %. Excel's window is the
+        -- current month plus the past 7 (Early) / past 2 (Infant).
         CASE WHEN al.first_demand_date IS NOT NULL
-              AND al.first_demand_date::date >= (SELECT early_cut  FROM ref) THEN 1 ELSE 0 END AS early_elig,
+              AND al.first_demand_date::date >= (SELECT early_cut FROM ref)
+              AND al.first_demand_date::date <= (SELECT elig_cap  FROM ref) THEN 1 ELSE 0 END AS early_elig,
         CASE WHEN al.first_demand_date IS NOT NULL
-              AND al.first_demand_date::date >= (SELECT infant_cut FROM ref) THEN 1 ELSE 0 END AS infant_elig,
+              AND al.first_demand_date::date >= (SELECT infant_cut FROM ref)
+              AND al.first_demand_date::date <= (SELECT elig_cap   FROM ref) THEN 1 ELSE 0 END AS infant_elig,
         CASE WHEN al.dpd > 0 THEN 1 ELSE 0 END AS is_od
     FROM all_loans al
 )

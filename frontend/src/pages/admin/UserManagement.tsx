@@ -34,19 +34,19 @@ import type {
   User, UserCreate, UserUpdate, Role, ScopeLevel, ReportCatalogItem, ScopeOption,
 } from '../../api/types'
 
-const ROLES: Role[] = ['admin', 'manager', 'analyst', 'branch_user']
+const ROLES: Role[] = ['admin', 'manager', 'officer', 'branch_user']
 
 const ROLE_COLORS: Record<Role, 'error' | 'warning' | 'info' | 'success'> = {
   admin: 'error',
   manager: 'warning',
-  analyst: 'info',
+  officer: 'info',
   branch_user: 'success',
 }
 
 const ROLE_DESC: Record<Role, string> = {
   admin: 'Full access + user management',
   manager: 'Reports & data as assigned below',
-  analyst: 'Reports & data as assigned below',
+  officer: 'Reports & data as assigned below',
   branch_user: 'Reports & data as assigned below',
 }
 
@@ -80,7 +80,7 @@ interface FormState {
 }
 
 const EMPTY_FORM: FormState = {
-  username: '', password: '', full_name: '', role: 'analyst',
+  username: '', password: '', full_name: '', role: 'officer',
   scope_level: 'ho', scope_values: [], all_reports: true, reports: [],
 }
 
@@ -266,8 +266,8 @@ export function UserManagement() {
                     <TableCell>
                       <Chip label={user.role.replace('_', ' ')} color={ROLE_COLORS[user.role]} size="small" sx={{ fontWeight: 700, fontSize: '0.7rem' }} />
                     </TableCell>
-                    <TableCell sx={{ fontSize: '0.75rem', color: '#7FA8D4' }}>{scopeText(user)}</TableCell>
-                    <TableCell sx={{ fontSize: '0.75rem', color: '#7FA8D4' }}>{reportsText(user)}</TableCell>
+                    <TableCell sx={{ fontSize: '0.75rem', color: '#64748B' }}>{scopeText(user)}</TableCell>
+                    <TableCell sx={{ fontSize: '0.75rem', color: '#64748B' }}>{reportsText(user)}</TableCell>
                     <TableCell>
                       <Chip
                         label={user.is_active ? 'Active' : 'Inactive'}
@@ -275,12 +275,12 @@ export function UserManagement() {
                         sx={{ height: 18, fontSize: '0.68rem', fontWeight: 700, background: user.is_active ? 'rgba(29,184,122,0.15)' : 'rgba(232,69,69,0.15)', color: user.is_active ? '#1DB87A' : '#E84545' }}
                       />
                     </TableCell>
-                    <TableCell sx={{ fontSize: '0.75rem', color: '#7FA8D4' }}>
+                    <TableCell sx={{ fontSize: '0.75rem', color: '#64748B' }}>
                       {user.last_login ? new Date(user.last_login).toLocaleDateString('en-IN') : 'Never'}
                     </TableCell>
                     <TableCell align="right">
                       <Tooltip title="Edit">
-                        <IconButton size="small" onClick={() => openEdit(user)} sx={{ color: '#7FA8D4' }}>
+                        <IconButton size="small" onClick={() => openEdit(user)} sx={{ color: '#64748B' }}>
                           <EditIcon fontSize="small" />
                         </IconButton>
                       </Tooltip>
@@ -299,10 +299,8 @@ export function UserManagement() {
       </Paper>
 
       {/* Create / Edit Dialog */}
-      <Dialog open={mode !== null} onClose={closeDialog} maxWidth="md" fullWidth
-        PaperProps={{ sx: { background: '#112845', border: '1px solid rgba(46,125,204,0.25)' } }}
-      >
-        <DialogTitle sx={{ borderBottom: '1px solid rgba(46,125,204,0.15)', fontWeight: 700 }}>
+      <Dialog open={mode !== null} onClose={closeDialog} maxWidth="md" fullWidth>
+        <DialogTitle sx={{ borderBottom: '1px solid rgba(0,0,0,0.08)', fontWeight: 700 }}>
           {mode === 'create' ? 'Add New User' : `Edit — ${selected?.full_name}`}
         </DialogTitle>
         <DialogContent sx={{ pt: 3 }}>
@@ -324,7 +322,7 @@ export function UserManagement() {
           {/* Data scope */}
           <Divider sx={{ my: 2.5, borderColor: 'rgba(46,125,204,0.15)' }} />
           <Box sx={{ fontSize: '0.8rem', fontWeight: 700, mb: 0.5 }}>Data Scope</Box>
-          <Box sx={{ fontSize: '0.72rem', color: '#7FA8D4', mb: 1.5 }}>
+          <Box sx={{ fontSize: '0.72rem', color: '#64748B', mb: 1.5 }}>
             The user only sees data belonging to this level of the hierarchy
             (LO → Branch → Area/Unit → Region → Cluster → Zone → HO). Admins always see everything.
           </Box>
@@ -364,7 +362,7 @@ export function UserManagement() {
           <Box className="flex items-center justify-between" sx={{ mb: 0.5 }}>
             <Box>
               <Box sx={{ fontSize: '0.8rem', fontWeight: 700 }}>Report Visibility</Box>
-              <Box sx={{ fontSize: '0.72rem', color: '#7FA8D4' }}>
+              <Box sx={{ fontSize: '0.72rem', color: '#64748B' }}>
                 Choose which reports appear for this user. Admins always see all.
               </Box>
             </Box>
@@ -398,8 +396,8 @@ export function UserManagement() {
             </Box>
           )}
         </DialogContent>
-        <DialogActions sx={{ px: 3, pb: 2.5, borderTop: '1px solid rgba(46,125,204,0.15)' }}>
-          <Button onClick={closeDialog} sx={{ color: '#7FA8D4' }}>Cancel</Button>
+        <DialogActions sx={{ px: 3, pb: 2.5, borderTop: '1px solid rgba(0,0,0,0.08)' }}>
+          <Button onClick={closeDialog} sx={{ color: '#64748B' }}>Cancel</Button>
           <Button
             variant="contained"
             onClick={handleSave}

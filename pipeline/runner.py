@@ -23,12 +23,13 @@ import pandas as pd
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from pipeline.db import run_sql_file
+from pipeline.db import run_sql_file, run_query
 from pipeline.sqlite_writer import write_report, write_pipeline_log, archive_report
-from pipeline.load_writeoff_master import get_writeoff_ids
+from pipeline.load_writeoff_master import get_writeoff_ids, writeoff_values_literal, writeoff_triples_literal
 
 # Reports whose SQL needs the write-off master ids injected (placeholder {wo_ids}).
-WRITEOFF_AWARE = {"aum_status", "collection_fact", "od_list", "od_slippage", "dq_category"}  # {wo_ids} used for raw_status override (not loan inclusion)
+WRITEOFF_AWARE = {"aum_status", "collection_fact", "od_list", "od_slippage", "dq_category", "writeoff",
+                  "aum_live", "delinquencies", "pos_par", "cashless_collection"}  # {wo_ids}/{wo_pairs} override; writeoff uses {wo_triples} (master-based)
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")
@@ -101,11 +102,44 @@ REPORTS = [
 
     # Write-off portfolio — written-off loans + post-WO recovery
     ("writeoff",          "writeoff.sql",          "rpt_writeoff"),
+
+    # AML Risk Category — active-book compliance monitoring (borrower AML risk,
+    # PEP / work-abroad / LUC flags) with full hierarchy + segment dims
+    ("aml",               "aml_risk.sql",          "rpt_aml"),
+    ("ots",               "ots.sql",               "rpt_ots"),
 ]
 
 # Split reports — IL and JLG run as separate DB calls, combined in Python.
 BUCKET_MOVEMENT_FILES = ["bucket_movement_il.sql", "bucket_movement_jlg.sql"]
 TREND_MONTHLY_FILES   = ["trend_monthly_il.sql", "trend_monthly_jlg.sql"]
+
+# Reports that get a "<lo_id> - <NAME>" display column mapped in after the SQL.
+# Deliberately NOT a SQL join: home_employee_master is tiny (4,689 rows) but
+# joining it inside aum_status.sql makes the planner assume a 23x fan-out on top
+# of its 70M grouped-row estimate (actual ~40k) and total cost goes 150M -> 5,192M.
+LO_NAME_REPORTS = {"aum_status", "aml"}
+
+
+def _add_lo_name(df):
+    """Map lo_id -> "<lo_id> - <NAME>" into a new lo_name column.
+
+    Falls back to the bare id when an officer is absent from the employee master
+    (currently none — IL 81/81 and JLG 500/500 ids resolve).
+    """
+    if df is None or df.empty or "lo_id" not in df.columns:
+        return df
+    names = run_query(
+        "SELECT employee_id::text AS lo_id, btrim(employee_name) AS nm "
+        "FROM public.home_employee_master WHERE employee_id IS NOT NULL"
+    )
+    lookup = dict(zip(names["lo_id"], names["nm"]))
+    ids = df["lo_id"].astype(str)
+    df["lo_name"] = [
+        f"{i} - {lookup[i]}" if i in lookup and lookup[i] else i for i in ids
+    ]
+    matched = sum(1 for i in ids.unique() if i in lookup)
+    log.info(f"    lo_name: {matched}/{ids.nunique()} officer ids resolved")
+    return df
 
 
 # ── Runner ────────────────────────────────────────────────────────────────────
@@ -115,9 +149,13 @@ def run_report(report_key: str, sql_file: str, table_name: str) -> bool:
         subs = None
         if report_key in WRITEOFF_AWARE:
             ids = get_writeoff_ids()
-            subs = {"wo_ids": ",".join(str(i) for i in ids)}
+            subs = {"wo_ids": ",".join(str(i) for i in ids),
+                    "wo_pairs": writeoff_values_literal(),
+                    "wo_triples": writeoff_triples_literal()}
             log.info(f"    injecting {len(ids)} write-off ids from writeoff_master")
         df = run_sql_file(sql_file, subs=subs)
+        if report_key in LO_NAME_REPORTS:
+            df = _add_lo_name(df)
         write_report(df, table_name, mode="replace")
         archive_report(df, table_name)          # retain a dated copy → <table>_hist
         write_pipeline_log(report_key, "SUCCESS")
@@ -131,6 +169,71 @@ def run_report(report_key: str, sql_file: str, table_name: str) -> bool:
     except Exception as e:
         log.error(f"[FAIL]  {report_key} — {e}")
         write_pipeline_log(report_key, "FAILED", str(e))
+        return False
+
+
+def run_credit_bureau() -> bool:
+    """Credit Bureau & Sourcing — the ONLY report sourced from a different
+    DATABASE (cb_engine), so it cannot use run_sql_file / the core engine.
+
+    The bureau facts are keyed by branch NAME while the hierarchy lives in the
+    core DB; Postgres cannot join across databases, so the merge happens here in
+    pandas. Branches the bureau reports but the core master does not carry
+    (partner branches, Corporate Office, closed branches — ~6% of pulls) resolve
+    to 'Unassigned', matching every other report's convention.
+    """
+    key, table = "credit_bureau", "rpt_credit_bureau"
+    log.info(f"[START] {key}")
+    try:
+        import os
+        from sqlalchemy import text as _sql_text
+        from pipeline.db import get_cb_engine, _get_engine, QUERY_DIR
+
+        sql = open(os.path.join(QUERY_DIR, "credit_bureau.sql"), encoding="utf-8").read()
+        with get_cb_engine().connect() as conn:
+            df = pd.read_sql(_sql_text(sql), conn)
+        log.info(f"    cb_engine returned {len(df)} rows")
+        if df.empty:
+            raise RuntimeError("credit_bureau produced no rows — refusing to write")
+
+        with _get_engine().connect() as conn:
+            hier = pd.read_sql(_sql_text("""
+                SELECT bm.branch_id, bm.branch_name, a.area_name,
+                       reg.branch_name AS region_name, clus.area_name AS cluster_name,
+                       z.area_name AS zone_name, bm.state_id, bm.district_id
+                FROM public.brnch_master bm
+                LEFT JOIN public.area_master  a    ON bm.area_id   = a.area_id
+                LEFT JOIN public.brnch_master reg  ON bm.region_id = reg.branch_id
+                LEFT JOIN public.area_master  clus ON reg.area_id  = clus.area_id
+                LEFT JOIN public.area_master  z    ON clus.zone_id = z.area_id
+                WHERE bm.active = 'Y' AND bm.is_region = 'N'
+                  AND bm.branch_name <> 'DEMO' AND bm.closing_date IS NULL
+            """), conn)
+
+        # Case/space-insensitive name match — the two systems disagree on casing.
+        df["_k"] = df["cb_branch"].astype(str).str.strip().str.upper()
+        hier["_k"] = hier["branch_name"].astype(str).str.strip().str.upper()
+        merged = df.merge(hier.drop_duplicates("_k"), on="_k", how="left").drop(columns=["_k"])
+
+        matched = merged["branch_id"].notna().sum()
+        log.info(f"    branch match: {matched}/{len(merged)} rows "
+                 f"({100 * matched / max(len(merged), 1):.1f}%)")
+
+        merged["branch_name"] = merged["branch_name"].fillna(merged["cb_branch"])
+        for c in ["zone_name", "cluster_name", "region_name", "area_name"]:
+            merged[c] = merged[c].fillna("Unassigned")
+        merged["branch_id"] = merged["branch_id"].fillna("N/A")
+        for c in ["state_id", "district_id"]:
+            merged[c] = merged[c].astype("object").where(merged[c].notna(), "N/A").astype(str)
+
+        write_report(merged, table, mode="replace")
+        archive_report(merged, table)
+        write_pipeline_log(key, "SUCCESS")
+        log.info(f"[OK]    {key} → {table} ({len(merged)} rows)")
+        return True
+    except Exception as e:
+        log.error(f"[FAIL]  {key} — {e}")
+        write_pipeline_log(key, "FAILED", str(e))
         return False
 
 
@@ -177,6 +280,190 @@ def run_trend_monthly() -> bool:
                 if r["total_pos"] else 0.0, axis=1)
         combined = combined.reset_index()
         write_report(combined, table, mode="replace")
+        write_pipeline_log(key, "SUCCESS")
+        log.info(f"[OK]    {key} → {table} ({len(combined)} rows)")
+        return True
+    except Exception as e:
+        log.error(f"[FAIL]  {key} — {e}")
+        write_pipeline_log(key, "FAILED", str(e))
+        return False
+
+
+# The JLG trend is CHUNKED by loan_id to survive the replica's cancellation
+# window. Run whole, it is one ~2-min query on a single connection and the replica
+# drops it under load ("SSL connection has been closed unexpectedly") — an error
+# that (before the db.py fix) failed the whole run with no retry. Every measure in
+# the query is per-loan and additive, so N balanced loan_id chunks (~22s each,
+# mod(loan_id,N)) produce the identical result once re-aggregated. IL is small
+# (~4s) and runs whole. Tunable without a code change via TREND_JLG_CHUNKS.
+# 10 (not 6) since the day-level-DPD reframe makes each chunk heavier (~57s at
+# N=6, in the replica's cancel window); N=10 keeps each chunk ~34s with margin.
+TREND_JLG_CHUNKS = int(os.getenv("TREND_JLG_CHUNKS", "10"))
+
+# rpt_trend_full dimension columns (everything else is a summable measure). The
+# re-aggregation groups by these, so EVERY dimension must be listed or its grain
+# is silently summed away.
+_TREND_DIMS = ["month_end", "loan_source", "business_segment", "zone_name",
+               "cluster_name", "region_name", "area_name", "branch_name",
+               "branch_id", "lo_id", "state_id", "district_id",
+               "disb_year", "cycle_no", "prod_classification"]
+
+
+def _reaggregate_trend(df: pd.DataFrame) -> pd.DataFrame:
+    """Collapse to one row per (month × segment × branch × lo).
+
+    Chunking JLG by loan_id splits each group across passes — a branch's loans
+    land in different loan_id chunks — so the same (month, branch, lo) appears
+    once per chunk and the components must be summed. IL rows are already
+    one-per-group, so this is a no-op for them. Keeps rpt_trend_full clean (one
+    row per group) for the dashboard and for manual pgAdmin validation.
+    """
+    if df.empty:
+        return df
+    dims = [c for c in _TREND_DIMS if c in df.columns]
+    measures = [c for c in df.columns if c not in dims]
+    df[measures] = df[measures].apply(pd.to_numeric, errors="coerce").fillna(0)
+    return df.groupby(dims, as_index=False, dropna=False)[measures].sum()
+
+
+def _freeze_write_trend(combined, table: str) -> int:
+    """FROZEN HISTORY write: replace ONLY the last completed month; every earlier
+    month keeps the value it was last published with.
+
+    Why: the engine recomputes all history from today's source state, so any
+    later-arriving fact (a death flag, a write-off added to the master, a
+    back-dated correction) would silently RESTATE months that were already
+    published — e.g. July's OD Slippage changing weeks after month close.
+    Only the newest completed month stays open (it keeps absorbing late-posted
+    collections all through the following month); once the month rolls over it
+    is frozen. Use --full-rebuild to deliberately restate everything after a
+    logic change.
+    """
+    from pipeline.report_store import pg_engine
+    from sqlalchemy import text
+    if combined is None or combined.empty:
+        # Never delete stored months on an empty result — that would silently wipe
+        # the newest month. Fail loudly instead; the caller logs it and history stays.
+        raise RuntimeError("trend_full produced no rows — refusing to touch stored history")
+    boundary = pd.to_datetime(combined["month_end"]).max().date()
+    recent = combined[pd.to_datetime(combined["month_end"]).dt.date >= boundary]
+    eng = pg_engine()
+    with eng.begin() as conn:
+        conn.execute(text(f"DELETE FROM {table} WHERE month_end >= :b"), {"b": boundary})
+        recent.to_sql(table, conn, if_exists="append", index=False, chunksize=5000)
+        total = conn.execute(text(f"SELECT COUNT(*) FROM {table}")).scalar()
+        frozen = conn.execute(text(
+            f"SELECT COUNT(DISTINCT month_end) FROM {table} WHERE month_end < :b"), {"b": boundary}).scalar()
+    log.info(f"    frozen history: {frozen} earlier month(s) preserved; "
+             f"recomputed {boundary} only ({len(recent)} rows)")
+    return total
+
+
+def run_trend_full(full_rebuild: bool = False) -> bool:
+    """Full-history monthly trend engine (IL whole + JLG chunked) → rpt_trend_full.
+
+    Monthly grain (one row per month_end × segment × branch × lo) with
+    additive measure components for the 13 Trend reports.
+
+    History is FROZEN: only the last completed month is rewritten on a normal
+    run (see _freeze_write_trend). Pass full_rebuild=True (CLI --full-rebuild)
+    to restate every month — required after any calc change, and for the very
+    first run that establishes the frozen baseline.
+    """
+    key, table = "trend_full", "rpt_trend_full"
+    log.info(f"[START] {key} (IL whole + JLG in {TREND_JLG_CHUNKS} chunks, full history)")
+    try:
+        ids = get_writeoff_ids()
+        base = {"wo_ids": ",".join(str(i) for i in ids) or "0",
+                "wo_pairs": writeoff_values_literal()}
+
+        # IL: whole book (fast). trend_full_il.sql has no {chunk_pred}; the empty
+        # sub is a harmless no-op.
+        il = run_sql_file("trend_full_il.sql", subs={**base, "chunk_pred": ""},
+                          max_retries=2, retry_delay=20)
+        log.info(f"    IL: {len(il)} rows")
+
+        # JLG: N balanced loan_id chunks, each short enough to complete; a stalled
+        # chunk retries in ~22s instead of discarding a 2-min whole-book run.
+        parts = [il]
+        for k in range(TREND_JLG_CHUNKS):
+            pred = f"AND mod(la.loan_id, {TREND_JLG_CHUNKS}) = {k}"
+            part = run_sql_file("trend_full_jlg.sql",
+                                subs={**base, "chunk_pred": pred},
+                                max_retries=4, retry_delay=20)
+            log.info(f"    JLG chunk {k + 1}/{TREND_JLG_CHUNKS}: {len(part)} rows")
+            parts.append(part)
+
+        combined = _reaggregate_trend(pd.concat(parts, ignore_index=True))
+
+        from pipeline.report_store import use_postgres, pg_write_df, pg_engine, table_exists
+        if use_postgres():
+            # Empty table (or an explicit restatement) => write every month;
+            # otherwise keep published history frozen and rewrite only the last month.
+            first_load = full_rebuild
+            if not first_load:
+                try:
+                    from sqlalchemy import text as _t
+                    with pg_engine().connect() as c:
+                        first_load = (not table_exists(c, table)) or \
+                            (c.execute(_t(f"SELECT COUNT(*) FROM {table}")).scalar() or 0) == 0
+                except Exception:
+                    first_load = True
+            if first_load:
+                n = pg_write_df(combined, table, mode="replace")
+                print(f"  ✅ {table:<30} {n:>6} rows  [FULL REBUILD -> postgres]")
+            else:
+                n = _freeze_write_trend(combined, table)
+                print(f"  ✅ {table:<30} {n:>6} rows  [frozen history -> postgres]")
+        else:
+            write_report(combined, table, mode="replace")
+        write_pipeline_log(key, "SUCCESS")
+        log.info(f"[OK]    {key} → {table} ({len(combined)} rows)")
+        return True
+    except Exception as e:
+        log.error(f"[FAIL]  {key} — {e}")
+        write_pipeline_log(key, "FAILED", str(e))
+        return False
+
+
+# ── MTD flow (current partial month) for the trend's July point ────────────────
+_MTD_FLOW_DIMS = ["loan_source", "business_segment", "cluster_name", "region_name",
+                  "area_name", "branch_name", "branch_id", "lo_id"]
+
+
+def run_mtd_flow() -> bool:
+    """Current partial-month flow measures no live report table carries — post
+    write-off recovery + collections from prev-EOM PAR>60 loans — into
+    rpt_mtd_flow, keyed like the trend so the backend appends the July (MTD,
+    partial) point for wo_recovery / par60_collection. IL whole + JLG chunked
+    (the prev-EOM DPD over ~440k JLG loans is the heavy part), then re-aggregated
+    (a branch's loans span all chunks)."""
+    key, table = "mtd_flow", "rpt_mtd_flow"
+    log.info(f"[START] {key} (IL whole + JLG in {TREND_JLG_CHUNKS} chunks)")
+    try:
+        base = {"wo_pairs": writeoff_values_literal()}
+        il = run_sql_file("mtd_flow_il.sql", subs={**base, "chunk_pred": ""},
+                          max_retries=2, retry_delay=20)
+        log.info(f"    IL: {len(il)} rows")
+        parts = [il]
+        for k in range(TREND_JLG_CHUNKS):
+            pred = f"AND mod(la.loan_id, {TREND_JLG_CHUNKS}) = {k}"
+            part = run_sql_file("mtd_flow_jlg.sql", subs={**base, "chunk_pred": pred},
+                                max_retries=4, retry_delay=20)
+            log.info(f"    JLG chunk {k + 1}/{TREND_JLG_CHUNKS}: {len(part)} rows")
+            parts.append(part)
+        df = pd.concat(parts, ignore_index=True)
+        dims = [c for c in _MTD_FLOW_DIMS if c in df.columns]
+        meas = [c for c in df.columns if c not in dims]
+        df[meas] = df[meas].apply(pd.to_numeric, errors="coerce").fillna(0)
+        combined = df.groupby(dims, as_index=False, dropna=False)[meas].sum()
+
+        from pipeline.report_store import use_postgres, pg_write_df
+        if use_postgres():
+            n = pg_write_df(combined, table, mode="replace")
+            print(f"  ✅ {table:<30} {n:>6} rows  [replace -> postgres]")
+        else:
+            write_report(combined, table, mode="replace")
         write_pipeline_log(key, "SUCCESS")
         log.info(f"[OK]    {key} → {table} ({len(combined)} rows)")
         return True
@@ -261,11 +548,14 @@ def run_dpd_snapshot() -> bool:
 SPLIT_REPORTS = {
     "bucket_movement": run_bucket_movement,
     "trend_monthly":   run_trend_monthly,
+    "trend_full":      run_trend_full,
+    "mtd_flow":        run_mtd_flow,
     "dpd_snapshot":    run_dpd_snapshot,
+    "credit_bureau":   run_credit_bureau,   # sourced from the cb_engine DATABASE
 }
 
 
-def run_pipeline(target: str = None) -> None:
+def run_pipeline(target: str = None, full_rebuild: bool = False) -> None:
     start = datetime.now()
     log.info("=" * 60)
     log.info(f"Pipeline started  [{start:%Y-%m-%d %H:%M:%S}]")
@@ -273,7 +563,8 @@ def run_pipeline(target: str = None) -> None:
 
     # A single split-report target (bucket_movement / trend_monthly)
     if target in SPLIT_REPORTS:
-        ok = SPLIT_REPORTS[target]()
+        fn = SPLIT_REPORTS[target]
+        ok = fn(full_rebuild=full_rebuild) if fn is run_trend_full else fn()
         elapsed = (datetime.now() - start).seconds
         log.info("=" * 60)
         log.info(f"Pipeline complete in {elapsed}s  |  OK={int(ok)}  FAIL={int(not ok)}")
@@ -320,5 +611,10 @@ if __name__ == "__main__":
         "--report", "-r", type=str, default=None,
         help=f"Run a single report. Options: {[r[0] for r in REPORTS]}"
     )
+    parser.add_argument(
+        "--full-rebuild", action="store_true",
+        help="trend_full: RESTATE every month instead of keeping published history "
+             "frozen. Required after a calc change and for the first baseline load."
+    )
     args = parser.parse_args()
-    run_pipeline(target=args.report)
+    run_pipeline(target=args.report, full_rebuild=args.full_rebuild)

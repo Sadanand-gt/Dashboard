@@ -10,13 +10,22 @@
 -- =============================================================================
 
 WITH
-
+-- Write-off master, matched on loan_id AND date. loan_id is NOT unique across
+-- sources: every IL loan here also exists in JLG with an earlier disbursement
+-- (customers graduate JLG -> IL). Matching on loan_id alone wrongly kills a
+-- brand-new IL loan whose id was written off in its earlier JLG life, so a
+-- write-off may only apply to a loan that already existed when it was written
+-- off. A NULL writeoff_date falls back to id-only matching.
+wo_master AS (
+    SELECT v.loan_id::bigint AS loan_id, v.wo_date::date AS wo_date
+    FROM (VALUES {wo_pairs}) AS v(loan_id, wo_date)
+),
 ref AS (
     SELECT
-        (date_trunc('month', current_date) - interval '1 day')::date                        AS prev_month_end,
-        date_trunc('month', current_date)::date                                              AS curr_month_start,
-        (date_trunc('month', current_date - interval '1 month') - interval '1 day')::date   AS prev_prev_month_end,
-        date_trunc('month', current_date - interval '1 month')::date                        AS prev_month_start
+        (date_trunc('month', current_date - 1) - interval '1 day')::date                        AS prev_month_end,
+        date_trunc('month', current_date - 1)::date                                              AS curr_month_start,
+        (date_trunc('month', current_date - 1 - interval '1 month') - interval '1 day')::date   AS prev_prev_month_end,
+        date_trunc('month', current_date - 1 - interval '1 month')::date                        AS prev_month_start
 ),
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -379,7 +388,8 @@ il_loans AS (
         coalesce(d.dpd, 0)                                      AS eom_dpd,
         coalesce(p.pre_dpd, 0)                                  AS pre_dpd,
         coalesce(la.principal_arrear, 0) + coalesce(la.interest_arrear, 0) AS total_arrear,
-        CASE WHEN la.loan_id IN ({wo_ids}) OR la.status = 'W'
+        CASE WHEN la.status = 'W' OR (w.loan_id IS NOT NULL
+                  AND (w.wo_date IS NULL OR la.disbursement_date::date <= w.wo_date))
              THEN 'W' ELSE la.status END                        AS raw_status,
         coalesce(la.cycle::text, 'N/A')                         AS cycle_no,
         extract(year FROM la.disbursement_date)::text           AS disb_year,
@@ -396,6 +406,7 @@ il_loans AS (
     LEFT JOIN il_prod_class ipc ON ipc.product_id = la.product_id::text
     LEFT JOIN il_extra      ex  ON ex.loan_id     = la.loan_id
     LEFT JOIN il_names      nm  ON nm.cust_id     = la.cust_id
+    LEFT JOIN wo_master w ON w.loan_id = la.loan_id
     WHERE la.status IN ('A', 'D', 'I', 'W')
 ),
 
@@ -417,7 +428,8 @@ jlg_loans AS (
         coalesce(d.dpd, 0)                                      AS eom_dpd,
         coalesce(p.pre_dpd, 0)                                  AS pre_dpd,
         coalesce(la.principal_arrear, 0) + coalesce(la.interest_arrear, 0) AS total_arrear,
-        CASE WHEN la.loan_id IN ({wo_ids}) OR la.status = 'W'
+        CASE WHEN la.status = 'W' OR (w.loan_id IS NOT NULL
+                  AND (w.wo_date IS NULL OR la.disbursement_date::date <= w.wo_date))
              THEN 'W' ELSE la.status END                        AS raw_status,
         coalesce(la.cycle::text, 'N/A')                         AS cycle_no,
         extract(year FROM la.disbursement_date)::text           AS disb_year,
@@ -435,6 +447,7 @@ jlg_loans AS (
     LEFT JOIN jlg_prod_class jpc ON jpc.product_id = la.product_id::text
     LEFT JOIN jlg_extra      ex  ON ex.loan_id     = la.loan_id
     LEFT JOIN jlg_names      nm  ON nm.cust_id     = la.cust_id
+    LEFT JOIN wo_master w ON w.loan_id = la.loan_id
     WHERE la.status IN ('A', 'D', 'I', 'W')
       AND (la.status != 'W' OR la.prin_os > 0)
       AND NOT EXISTS (
@@ -559,11 +572,11 @@ SELECT
     CASE
         WHEN b.dpd > 0 AND b.first_demand_date IS NOT NULL
              AND b.first_demand_date::date >=
-                 (date_trunc('month', current_date) - interval '2 month' - interval '1 day')::date
+                 (date_trunc('month', current_date - 1) - interval '2 month' - interval '1 day')::date
             THEN 'Infant'
         WHEN b.dpd > 0 AND b.first_demand_date IS NOT NULL
              AND b.first_demand_date::date >=
-                 (date_trunc('month', current_date) - interval '7 month' - interval '1 day')::date
+                 (date_trunc('month', current_date - 1) - interval '7 month' - interval '1 day')::date
             THEN 'Early'
         ELSE 'Mature'
     END                                    AS dq_category,

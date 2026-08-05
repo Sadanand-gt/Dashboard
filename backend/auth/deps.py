@@ -7,7 +7,7 @@ from core.reports_catalog import report_for_path
 
 bearer = HTTPBearer()
 
-ROLE_HIERARCHY = ["branch_user", "analyst", "manager", "admin"]
+ROLE_HIERARCHY = ["branch_user", "officer", "manager", "admin"]
 
 
 def get_current_user(creds: HTTPAuthorizationCredentials = Depends(bearer)) -> dict:
@@ -25,7 +25,10 @@ def get_current_user(creds: HTTPAuthorizationCredentials = Depends(bearer)) -> d
     if not row:
         raise HTTPException(status_code=401, detail="User not found or inactive")
 
-    return dict(row)
+    user = dict(row)
+    if user.get("role") == "analyst":   # legacy value — renamed to 'officer'
+        user["role"] = "officer"
+    return user
 
 
 def require_role(*allowed_roles: str):
@@ -41,7 +44,7 @@ def require_role(*allowed_roles: str):
 
 require_admin = require_role("admin")
 require_manager_or_above = require_role("admin", "manager")
-require_analyst_or_above = require_role("admin", "manager", "analyst")
+require_officer_or_above = require_role("admin", "manager", "officer")
 
 
 async def report_gate(request: Request, user: dict = Depends(get_current_user)) -> dict:

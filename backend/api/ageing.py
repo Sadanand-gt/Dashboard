@@ -116,6 +116,11 @@ def ageing_group_summary(
     user: dict = Depends(get_current_user),
 ):
     aum = read_report("rpt_aum_status")
+    # movement-only rows (closed during the current month) are not the live book
+    if "open_now" in aum.columns:
+        aum = aum[aum["open_now"].fillna(True).astype(bool)]
+    elif "loan_status" in aum.columns:
+        aum = aum[aum["loan_status"].astype(str) != "Closed"]
     col = read_report("rpt_collection")
     if aum.empty:
         return []
@@ -196,6 +201,11 @@ def ageing_group_summary(
 @router.get("/ageing/kpis")
 def ageing_kpis(filters: dict = Depends(_filter_params), user: dict = Depends(get_current_user)):
     aum = read_report("rpt_aum_status")
+    # movement-only rows (closed during the current month) are not the live book
+    if "open_now" in aum.columns:
+        aum = aum[aum["open_now"].fillna(True).astype(bool)]
+    elif "loan_status" in aum.columns:
+        aum = aum[aum["loan_status"].astype(str) != "Closed"]
     col = read_report("rpt_collection")
     if aum.empty:
         return {}

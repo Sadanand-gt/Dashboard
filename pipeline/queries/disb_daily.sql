@@ -22,6 +22,7 @@ jlg AS (
         sum(hla.total_loan_amount)        AS amt
     FROM public.home_loan_account hla
     WHERE hla.status IN ('A', 'X')
+      AND hla.loan_id >= 10000000                 -- drop junk/test ids (e.g. 1111111)
       AND hla.disbursement_date IS NOT NULL
     GROUP BY hla.disbursement_date::date
 )

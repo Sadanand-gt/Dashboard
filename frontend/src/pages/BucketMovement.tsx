@@ -16,6 +16,7 @@ import { api } from '../api/client'
 import { KpiCard } from '../components/KpiCard'
 import { useSlicerParams } from '../store/filterStore'
 import { fmtInr, fmtNum, fmtPct } from './collectionShared'
+import { TrendSection } from '../components/TrendSection'
 
 interface MatrixRow { bucket: string; cells: number[]; total: number }
 interface SummaryRow { bucket: string; value: number; improved_pct: number; static_pct: number; worsened_pct: number }
@@ -205,6 +206,11 @@ export function BucketMovement() {
           </Table>
         </Box>
       </Paper>
+
+      <TrendSection title="Trend — Roll Rate %"
+        portfolio={includeWO ? 'with' : 'excl'}
+        measures={[{ key: 'roll_rate', label: 'Roll Rate %', format: 'pct' }]} />
+
     </Box>
   )
 }

@@ -51,6 +51,11 @@ DIM_COL = {
 
 
 def _apply_filters(df, f) -> pd.DataFrame:
+    # Movement universe = the PREV month-end portfolio: keep only loans on-book at
+    # 30-Jun (drops current-month disbursals, which have no month-end demand and
+    # can't be OD; keeps current-month closures). No-op on tables without the flag.
+    if "onbook_prev_eom" in df.columns:
+        df = df[df["onbook_prev_eom"].fillna(False).astype(bool)]
     if f.get("portfolio") == "without" and "loan_status" in df.columns:
         df = df[df["loan_status"] != "Write-off"]
     df = segment_filter(df, f.get("segment") or "ALL")
@@ -175,7 +180,9 @@ def od_status_kpis(
         return {}
     df = _apply_filters(df, filters).copy()
     df["_odm"] = _od_movement(df)
-    pos = float(df["total_pos"].sum())
+    # POS stated at the PREVIOUS month-end (matches the Excel movement sheets)
+    pcol = "prev_pos" if "prev_pos" in df.columns else "total_pos"
+    pos = float(df[pcol].sum())
     by = df.groupby("_odm")["loan_count"].sum().to_dict()
     return {
         "total_pos": pos,
@@ -240,13 +247,14 @@ def od_status_matrix(
     a2 = _safe(df, group_by_2) if group_by_2 and group_by_2 != "none" else None
     keys = [a1] + ([a2] if a2 else [])
 
+    pcol = "prev_pos" if "prev_pos" in df.columns else "total_pos"   # POS @ prev month-end
     cnt = df.groupby(keys + ["_odm"])["loan_count"].sum()
-    pos = df.groupby(keys + ["_odm"])["total_pos"].sum()
+    pos = df.groupby(keys + ["_odm"])[pcol].sum()
 
     rows = []
     for gv, sub in df.groupby(keys, dropna=False):
         gv = gv if isinstance(gv, tuple) else (gv,)
-        row_pos_tot = float(sub["total_pos"].sum())
+        row_pos_tot = float(sub[pcol].sum())
         row_cnt_tot = int(sub["loan_count"].sum())
         cells = []
         for st in OD_STATES:
@@ -259,11 +267,11 @@ def od_status_matrix(
     _order_rows(rows, group_by)
 
     # Grand total
-    gtot_pos = float(df["total_pos"].sum())
+    gtot_pos = float(df[pcol].sum())
     gcells = []
     for st in OD_STATES:
         c = int(df[df["_odm"] == st]["loan_count"].sum())
-        p = float(df[df["_odm"] == st]["total_pos"].sum())
+        p = float(df[df["_odm"] == st][pcol].sum())
         gcells.append({"count": c, "pos_pct": round(p / gtot_pos * 100, 2) if gtot_pos else 0})
     rows.append({"name": "Grand Total", "name2": None, "cells": gcells,
                  "total_count": int(df["loan_count"].sum()), "total_pos": gtot_pos, "is_total": True})

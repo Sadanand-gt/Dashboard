@@ -1,4 +1,4 @@
-import { useState, useMemo } from 'react'
+import { useState, useMemo, useRef, useLayoutEffect } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import Box from '@mui/material/Box'
 import Paper from '@mui/material/Paper'
@@ -62,7 +62,12 @@ const STATE_COLOR: Record<string, string> = {
 function odStatusColor(s: string): string { return STATE_COLOR[s] ?? '#64748B' }
 
 export function OdStatus() {
-  const [ap1, setAp1] = useState('branch_name')
+  // Two-row sticky header: MUI pins BOTH rows at top:0, so the 2nd row slides
+  // under the 1st while scrolling. Measure row 1 and park row 2 right below it.
+  const hdrRow1Ref = useRef<HTMLTableRowElement>(null)
+  const [hdrRow1H, setHdrRow1H] = useState(44)
+
+  const [ap1, setAp1] = useState('business_segment')
   const [ap2, setAp2] = useState('none')                // AP #2 (optional second group-by)
   const [includeWO, setIncludeWO] = useState(false)     // default Excl. W/O (matches Excel)
   const [freq, setFreq] = useState('all')               // Previous-slippage frequency filter
@@ -91,6 +96,12 @@ export function OdStatus() {
   const ap1Label = AP_DIMS.find((o) => o.value === ap1)?.label ?? ''
   const ap2Label = AP_DIMS.find((o) => o.value === ap2)?.label ?? ''
   const hasAp2 = ap2 !== 'none'
+
+  // Re-measure the 1st header row whenever the header can change shape.
+  useLayoutEffect(() => {
+    const h = hdrRow1Ref.current?.getBoundingClientRect().height
+    if (h && Math.abs(h - hdrRow1H) > 0.5) setHdrRow1H(h)
+  }, [states.length, hasAp2, mLoading, hdrRow1H])
 
   return (
     <Box className="space-y-3">
@@ -149,13 +160,17 @@ export function OdStatus() {
           <Box sx={{ overflowX: 'auto', maxHeight: 420 }}>
             <Table size="small" stickyHeader sx={{ minWidth: hasAp2 ? 960 : 820 }}>
               <TableHead>
-                <TableRow sx={{ '& th': { background: '#F8FAFF', borderBottom: '1px solid rgba(0,0,0,0.08)', fontWeight: 700, color: '#1E40AF', fontSize: '0.7rem', whiteSpace: 'nowrap' } }}>
+                {/* Two-row sticky header: MUI puts top:0 on BOTH rows, which makes
+                    the 2nd row slide under the 1st while scrolling. Pin row 1 at
+                    top:0 and row 2 just below it (HDR_ROW_H). rowSpan cells span
+                    both rows, so they stay anchored at top:0. */}
+                <TableRow ref={hdrRow1Ref} sx={{ '& th': { background: '#F8FAFF', borderBottom: '1px solid rgba(0,0,0,0.08)', fontWeight: 700, color: '#1E40AF', fontSize: '0.7rem', whiteSpace: 'nowrap', position: 'sticky', top: 0, zIndex: 3 } }}>
                   <TableCell rowSpan={2}>{ap1Label}</TableCell>
                   {hasAp2 && <TableCell rowSpan={2}>{ap2Label}</TableCell>}
                   {states.map((s) => <TableCell key={s} align="center" colSpan={2} sx={{ color: odStatusColor(s) }}>{s}</TableCell>)}
                   <TableCell align="right" rowSpan={2}>Total #</TableCell>
                 </TableRow>
-                <TableRow sx={{ '& th': { background: '#F8FAFF', borderBottom: '1px solid rgba(0,0,0,0.08)', fontWeight: 600, color: '#64748B', fontSize: '0.66rem' } }}>
+                <TableRow sx={{ '& th': { background: '#F8FAFF', borderBottom: '1px solid rgba(0,0,0,0.08)', fontWeight: 600, color: '#64748B', fontSize: '0.66rem', position: 'sticky', top: hdrRow1H, zIndex: 3 } }}>
                   {states.map((s) => [
                     <TableCell key={s + '#'} align="right">#</TableCell>,
                     <TableCell key={s + '%'} align="right">POS %</TableCell>,

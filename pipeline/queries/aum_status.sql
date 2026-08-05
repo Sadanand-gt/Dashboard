@@ -9,13 +9,36 @@
 -- =============================================================================
 
 WITH
-
+-- Write-off master, matched on loan_id AND date. loan_id is NOT unique across
+-- sources: every IL loan here also exists in JLG with an earlier disbursement
+-- (customers graduate JLG -> IL). Matching on loan_id alone wrongly kills a
+-- brand-new IL loan whose id was written off in its earlier JLG life, so a
+-- write-off may only apply to a loan that already existed when it was written
+-- off. A NULL writeoff_date falls back to id-only matching.
+wo_master AS (
+    SELECT v.loan_id::bigint AS loan_id, v.wo_date::date AS wo_date
+    FROM (VALUES {wo_pairs}) AS v(loan_id, wo_date)
+),
 ref AS (
+    -- The month-end reference is ALWAYS the LAST COMPLETED month-end (NBFC standard).
+    -- On 1-Aug that is 31-Jul: July closed with full data (the warehouse holds T-1),
+    -- so 31-Jul is the month end to report against.
+    --
+    -- This deliberately does NOT use the T-1 form (date_trunc('month', current_date - 1)
+    -- ...), which on the 1st resolves one month further back — 1-Aug would anchor on
+    -- 30-Jun and report June's portfolio while trend_full and pos_par both report
+    -- 31-Jul, breaking the cross-report match on one day in thirty. Identical on every
+    -- other day of the month.
+    --
+    -- Divergence from the reference Bucket_Movement .pbit (EOMONTH(TODAY()-1,-1)) is
+    -- therefore limited to the 1st: on that day the .pbit still shows the PREVIOUS
+    -- month's movement (Jun-30 -> Jul) whereas this shows the just-closed month-end
+    -- (31-Jul) with the new month's movement not yet started. Days 2-31 are identical.
     SELECT
-        (date_trunc('month', current_date) - interval '1 day')::date                        AS prev_month_end,
-        date_trunc('month', current_date)::date                                              AS curr_month_start,
-        (date_trunc('month', current_date - interval '1 month') - interval '1 day')::date   AS prev_prev_month_end,
-        date_trunc('month', current_date - interval '1 month')::date                        AS prev_month_start
+        (date_trunc('month', current_date) - interval '1 day')::date                       AS prev_month_end,
+        date_trunc('month', current_date)::date                                            AS curr_month_start,
+        (date_trunc('month', current_date - interval '1 month') - interval '1 day')::date  AS prev_prev_month_end,
+        date_trunc('month', current_date - interval '1 month')::date                       AS prev_month_start
 ),
 
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -45,6 +68,13 @@ hierarchy AS (
       AND bm.branch_name <> 'DEMO'
       AND bm.closing_date IS NULL
 ),
+
+-- NOTE: lo_name ("<lo_id> - <NAME>") is NOT resolved here. Joining
+-- public.home_employee_master into this query — at any position, even with the
+-- uniqueness of employee_id made explicit — makes the planner estimate a 23x
+-- fan-out on top of its already-wild 70M grouped-row estimate (actual ~40k),
+-- pushing the total cost 150M -> 5,192M (34.6x). runner.py maps lo_id -> name
+-- in pandas after the fact instead; see LO_NAME_REPORTS there.
 
 -- ═════════════════════════════════════════════════════════════════════════════
 -- CURRENT DPD — EOM as of prev_month_end
@@ -325,6 +355,26 @@ jlg_extra AS (
 -- raw_status = 'W' if loan_id in writeoff_master OR db status = 'W' (no extra loans added)
 -- ═════════════════════════════════════════════════════════════════════════════
 
+-- ── POS AT PREV MONTH-END (for the movement reports) ────────────────────────
+-- Bucket Movement / OD Status are denominated in the PREVIOUS month-end POS
+-- (the Excel sheet header is literally "POS [Previous Month]"), NOT the live POS.
+-- Same formula as the trend engine: sanction - principal collected through the
+-- prev month-end, floored at 0. Reuses the same A/V cash basis as the EOM DPD.
+il_pos_eom AS (
+    SELECT loan_id, sum(coalesce(principal_collected, 0)) AS prin_coll
+    FROM public.repayment_detail_il
+    WHERE collection_date_time::date < (SELECT curr_month_start FROM ref)
+      AND status IN ('A', 'V')
+    GROUP BY loan_id
+),
+jlg_pos_eom AS (
+    SELECT loan_id, sum(coalesce(principal_collected, 0)) AS prin_coll
+    FROM public.repayment_detail
+    WHERE collection_date::date < (SELECT curr_month_start FROM ref)
+      AND status IN ('A', 'V')
+    GROUP BY loan_id
+),
+
 il_loans AS (
     SELECT
         'IL'                                                    AS loan_source,
@@ -340,16 +390,24 @@ il_loans AS (
         la.loan_officer                                         AS lo_id,
         la.product_id::text                                     AS product_id,
         la.principal_outstanding                                AS pos,
+        greatest(coalesce(la.total_loan_amount,0)
+                 - coalesce(pe.prin_coll,0), 0)                 AS prev_pos,
         la.total_loan_amount                                    AS sanctioned_amount,
         la.disbursement_date,
         la.first_demand_date,
         la.last_demand_date,
         la.last_collection_date,
         coalesce(la.dpd, 0)                                     AS dpd,
-        coalesce(d.dpd, 0)                                      AS eom_dpd,
-        coalesce(p.pre_dpd, 0)                                  AS pre_dpd,
+        -- Death cases (status D / I) follow the CORE, which zeroes DPD on death.
+        -- la.dpd (live) is already 0 for them; the RECONSTRUCTED month-end DPDs
+        -- must match, else the previous-month bucket disagrees with the live one.
+        CASE WHEN la.status IN ('D','I') AND coalesce(la.dpd,0) = 0 THEN 0
+             ELSE coalesce(d.dpd, 0) END                        AS eom_dpd,
+        CASE WHEN la.status IN ('D','I') AND coalesce(la.dpd,0) = 0 THEN 0
+             ELSE coalesce(p.pre_dpd, 0) END                    AS pre_dpd,
         coalesce(la.principal_arrear, 0) + coalesce(la.interest_arrear, 0) AS total_arrear,
-        CASE WHEN la.loan_id IN ({wo_ids}) OR la.status = 'W'
+        CASE WHEN la.status = 'W' OR (w.loan_id IS NOT NULL
+                  AND (w.wo_date IS NULL OR la.disbursement_date::date <= w.wo_date))
              THEN 'W' ELSE la.status END                        AS raw_status,
         coalesce(la.cycle::text, 'N/A')                         AS cycle_no,
         extract(year FROM la.disbursement_date)::text           AS disb_year,
@@ -358,13 +416,36 @@ il_loans AS (
         coalesce(ex.facility_id,         'N/A')               AS facility_id,
         coalesce(ex.lender_id,           'N/A')               AS lender_id,
         coalesce(ex.caste,               'N/A')               AS caste,
-        coalesce(ex.religion,            'N/A')               AS religion
+        coalesce(ex.religion,            'N/A')               AS religion,
+        -- TRUE = in the LIVE active book (open as of today). FALSE = on-book at
+        -- prev month-end but closed during the current month (movement-only).
+        (la.status IN ('A','D','I','W')
+         AND (la.closure_date IS NULL OR la.closure_date::date > current_date - 1
+              OR la.status = 'W'))                             AS open_now
     FROM public.loan_account_il la
     LEFT JOIN il_dpd        d   ON d.loan_id      = la.loan_id
     LEFT JOIN il_pre        p   ON p.loan_id      = la.loan_id
     LEFT JOIN il_prod_class ipc ON ipc.product_id = la.product_id::text
     LEFT JOIN il_extra      ex  ON ex.loan_id     = la.loan_id
-    WHERE la.status IN ('A', 'D', 'I', 'W')
+    LEFT JOIN il_pos_eom    pe  ON pe.loan_id     = la.loan_id
+    LEFT JOIN wo_master w ON w.loan_id = la.loan_id
+    WHERE la.loan_id >= 10000000                 -- drop junk/test ids (e.g. 1111111)
+      AND la.status <> 'R'
+      AND (
+           -- LIVE active book (open as of today). Unchanged universe for the
+           -- live-book reports (Current Outstanding / Ageing / DQ). W loans kept.
+           (la.status IN ('A','D','I','W')
+            AND (la.closure_date IS NULL OR la.closure_date::date > current_date - 1
+                 OR la.status = 'W'))
+        OR
+           -- On-book at PREV month-end but CLOSED during the current month. Added
+           -- ONLY so the movement reports (OD Status / Bucket Movement) reconcile
+           -- to the month-end portfolio; tagged loan_status='Closed' (open_now=false)
+           -- and dropped by every live-book report. These carry POS=0, live DPD=0.
+           (la.disbursement_date::date <= (SELECT prev_month_end FROM ref)
+            AND la.closure_date::date  >  (SELECT prev_month_end FROM ref)
+            AND la.closure_date::date  <= current_date - 1)
+      )
 ),
 
 jlg_loans AS (
@@ -376,16 +457,24 @@ jlg_loans AS (
         cm.assigned_to::varchar                                 AS lo_id,
         la.product_id::text                                     AS product_id,
         la.prin_os                                              AS pos,
+        greatest(coalesce(la.total_loan_amount,0)
+                 - coalesce(pe.prin_coll,0), 0)                 AS prev_pos,
         la.total_loan_amount                                    AS sanctioned_amount,
         la.disbursement_date,
         la.first_demand_date,
         la.last_demand_date,
         la.last_collection_date,
         coalesce(la.dpd, 0)                                     AS dpd,
-        coalesce(d.dpd, 0)                                      AS eom_dpd,
-        coalesce(p.pre_dpd, 0)                                  AS pre_dpd,
+        -- Death cases (status D / I) follow the CORE, which zeroes DPD on death.
+        -- la.dpd (live) is already 0 for them; the RECONSTRUCTED month-end DPDs
+        -- must match, else the previous-month bucket disagrees with the live one.
+        CASE WHEN la.status IN ('D','I') AND coalesce(la.dpd,0) = 0 THEN 0
+             ELSE coalesce(d.dpd, 0) END                        AS eom_dpd,
+        CASE WHEN la.status IN ('D','I') AND coalesce(la.dpd,0) = 0 THEN 0
+             ELSE coalesce(p.pre_dpd, 0) END                    AS pre_dpd,
         coalesce(la.principal_arrear, 0) + coalesce(la.interest_arrear, 0) AS total_arrear,
-        CASE WHEN la.loan_id IN ({wo_ids}) OR la.status = 'W'
+        CASE WHEN la.status = 'W' OR (w.loan_id IS NOT NULL
+                  AND (w.wo_date IS NULL OR la.disbursement_date::date <= w.wo_date))
              THEN 'W' ELSE la.status END                        AS raw_status,
         coalesce(la.cycle::text, 'N/A')                         AS cycle_no,
         extract(year FROM la.disbursement_date)::text           AS disb_year,
@@ -394,15 +483,37 @@ jlg_loans AS (
         coalesce(ex.facility_id,          'N/A')              AS facility_id,
         coalesce(ex.lender_id,            'N/A')              AS lender_id,
         coalesce(ex.caste,                'N/A')              AS caste,
-        coalesce(ex.religion,             'N/A')              AS religion
+        coalesce(ex.religion,             'N/A')              AS religion,
+        -- TRUE = in the LIVE active book (open today); FALSE = movement-only
+        -- (on-book at prev month-end, closed during the current month).
+        (la.status IN ('A','D','I','W')
+         AND (la.closure_date IS NULL OR la.closure_date::date > current_date - 1
+              OR la.status = 'W'))                             AS open_now
     FROM public.home_loan_account la
     JOIN public.home_center_master cm ON cm.center_id = la.center_id
     LEFT JOIN jlg_dpd        d   ON d.loan_id      = la.loan_id
     LEFT JOIN jlg_pre        p   ON p.loan_id      = la.loan_id
     LEFT JOIN jlg_prod_class jpc ON jpc.product_id = la.product_id::text
     LEFT JOIN jlg_extra      ex  ON ex.loan_id     = la.loan_id
-    WHERE la.status IN ('A', 'D', 'I', 'W')
+    LEFT JOIN jlg_pos_eom    pe  ON pe.loan_id     = la.loan_id
+    LEFT JOIN wo_master w ON w.loan_id = la.loan_id
+    WHERE la.loan_id >= 10000000                 -- drop junk/test ids (e.g. 1111111)
+      AND la.status <> 'R'
       AND (la.status != 'W' OR la.prin_os > 0)
+      AND (
+           -- LIVE active book (open today) — unchanged universe for the live-book
+           -- reports (Current Outstanding / Ageing / DQ). W loans kept.
+           (la.status IN ('A','D','I','W')
+            AND (la.closure_date IS NULL OR la.closure_date::date > current_date - 1
+                 OR la.status = 'W'))
+        OR
+           -- On-book at PREV month-end, CLOSED during the current month → kept ONLY
+           -- for the movement reports (loan_status='Closed', open_now=false).
+           -- POS=0, live DPD=0; dropped by every live-book report.
+           (la.disbursement_date::date <= (SELECT prev_month_end FROM ref)
+            AND la.closure_date::date  >  (SELECT prev_month_end FROM ref)
+            AND la.closure_date::date  <= current_date - 1)
+      )
       AND NOT EXISTS (
           SELECT 1 FROM public.loan_account_il il
           WHERE il.loan_id           = la.loan_id
@@ -488,12 +599,21 @@ SELECT
     b.loan_source,
     b.business_segment,
     b.curr_od_status,
-    CASE b.raw_status
-        WHEN 'A' THEN 'Active'
-        WHEN 'D' THEN 'Death' WHEN 'I' THEN 'Death'
-        WHEN 'W' THEN 'Write-off'
+    -- Write-off wins over Closed: a written-off loan that closed this month is
+    -- still a write-off (deep-NPA settlement), NOT a healthy 'Regularised' move.
+    -- The LIVE book is protected by the open_now flag below (live-book reports
+    -- filter open_now IS TRUE), so this no longer inflates live Write-off counts.
+    CASE
+        WHEN b.raw_status = 'W'        THEN 'Write-off'
+        WHEN NOT b.open_now            THEN 'Closed'   -- movement-only closure
+        WHEN b.raw_status = 'A'        THEN 'Active'
+        WHEN b.raw_status IN ('D','I') THEN 'Death'
         ELSE b.raw_status
     END                                             AS loan_status,
+    -- TRUE = in the LIVE active book (open as of the data date). Live-book reports
+    -- (Current Outstanding / Ageing / exec summary) filter on this; the movement
+    -- reports ignore it so current-month closures stay in the month-end portfolio.
+    b.open_now                                      AS open_now,
     b.dpd_bucket,
     b.prev_dpd_bucket,
     b.curr_dpd_bucket,
@@ -506,6 +626,17 @@ SELECT
     coalesce(h.branch_name,  'Unassigned')          AS branch_name,
     b.branch_id,
     coalesce(b.lo_id,              'N/A')            AS lo_id,
+    -- ── Display labels: "<id> - <NAME>" ──────────────────────────────────────
+    -- Matches the reference convention (S.Incentive notebook builds branch/area/
+    -- region/cluster/zone the same way; the Excel slicer is "BRANCH ID & NAME").
+    -- These are DISPLAY-ONLY, kept separate from the plain *_name columns above,
+    -- which carry the access-control scope values (core/scope.py) and the shared
+    -- slicer values used by every other report — those must not change format.
+    coalesce(h.zone_id::text   || ' - ' || h.zone_name,    'Unassigned') AS zone_label,
+    coalesce(h.cluster_id::text|| ' - ' || h.cluster_name, 'Unassigned') AS cluster_label,
+    coalesce(h.region_id::text || ' - ' || h.region_name,  'Unassigned') AS region_label,
+    coalesce(h.area_id::text   || ' - ' || h.area_name,    'Unassigned') AS area_label,
+    coalesce(b.branch_id::text || ' - ' || h.branch_name,  'Unassigned') AS branch_label,
     coalesce(b.prod_classification,'Other')         AS prod_classification,
     coalesce(h.state_id::text,   'N/A')             AS state_id,
     coalesce(h.district_id::text,'N/A')             AS district_id,
@@ -517,9 +648,21 @@ SELECT
     coalesce(b.caste,            'N/A')             AS caste,
     coalesce(b.religion,         'N/A')             AS religion,
     (SELECT prev_month_end FROM ref)                AS dpd_as_of,
+    -- Was the loan in the PREV month-end portfolio (disbursed on/before 30-Jun)?
+    -- The movement reports (OD Status / Bucket Movement) keep only these rows, so
+    -- current-month disbursals — which have no month-end demand and can't be OD —
+    -- are excluded, while current-month closures (also disbursed <= 30-Jun) stay.
+    -- ::date is REQUIRED: disbursement_date is a TIMESTAMP and prev_month_end a DATE,
+    -- so an uncast compare silently drops loans disbursed ON the month-end at any
+    -- time past midnight (IL carries a real time-of-day; JLG is always 00:00:00).
+    (b.disbursement_date::date <= (SELECT prev_month_end FROM ref)) AS onbook_prev_eom,
 
     count(b.loan_id)                                AS loan_count,
     round(sum(b.pos)::numeric,              2)      AS total_pos,
+    -- POS at the PREVIOUS month-end — the denominator Bucket Movement / OD Status
+    -- are stated in ("POS [Previous Month]" in the Excel sheet). Ties the trend
+    -- engine's pos_eom for the same month-end.
+    round(sum(b.prev_pos)::numeric,         2)      AS prev_pos,
     round(sum(b.sanctioned_amount)::numeric, 2)     AS total_sanctioned,
     round(sum(b.total_arrear)::numeric,     2)      AS total_arrear,
     round(sum(b.par0_pos)::numeric,  2)             AS par0_pos,
@@ -532,8 +675,10 @@ FROM bucketed b
 LEFT JOIN hierarchy h ON b.branch_id = h.branch_id
 GROUP BY
     b.loan_source, b.business_segment, b.curr_od_status,
-    b.raw_status, b.dpd_bucket, b.prev_dpd_bucket, b.curr_dpd_bucket, b.od_movement_status, b.bucket_movement,
+    b.raw_status, b.open_now, (b.disbursement_date::date <= (SELECT prev_month_end FROM ref)),
+    b.dpd_bucket, b.prev_dpd_bucket, b.curr_dpd_bucket, b.od_movement_status, b.bucket_movement,
     h.zone_name, h.cluster_name, h.region_name, h.area_name, h.branch_name,
+    h.zone_id, h.cluster_id, h.region_id, h.area_id,
     b.branch_id, b.lo_id, b.prod_classification,
     h.state_id, h.district_id,
     b.cycle_no, b.disb_year,
