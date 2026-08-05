@@ -12,7 +12,10 @@ export function SingleLineBarLabel({
 
   const x = Number(viewBox.x ?? 0) + Number(viewBox.width ?? 0) + Number(offset)
   const y = Number(viewBox.y ?? 0) + Number(viewBox.height ?? 0) / 2
-  const label = formatter ? formatter(amount) : String(amount)
+  const formatted = formatter ? formatter(amount) : String(amount)
+  const label = typeof formatted === 'string'
+    ? formatted.replace(/ /g, '\u00A0')
+    : formatted
 
   return (
     <text
@@ -24,6 +27,7 @@ export function SingleLineBarLabel({
       dominantBaseline="central"
       textAnchor="start"
       pointerEvents="none"
+      style={{ whiteSpace: 'pre' }}
     >
       {label}
     </text>
