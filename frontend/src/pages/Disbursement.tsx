@@ -16,13 +16,8 @@ import Divider from '@mui/material/Divider'
 import Tooltip from '@mui/material/Tooltip'
 import ToggleButton from '@mui/material/ToggleButton'
 import ToggleButtonGroup from '@mui/material/ToggleButtonGroup'
-import {
-  BarChart, Bar, XAxis, YAxis, Tooltip as RTooltip, Legend,
-  ResponsiveContainer, CartesianGrid, LineChart, Line, LabelList,
-} from 'recharts'
 import { api } from '../api/client'
 import { KpiCard } from '../components/KpiCard'
-import { SingleLineBarLabel } from '../components/SingleLineBarLabel'
 import { useSlicerParams } from '../store/filterStore'
 import { TrendSection } from '../components/TrendSection'
 
@@ -50,18 +45,6 @@ const DIM_OPTIONS = [
   { value: 'lo_id',               label: 'LO'                   },
 ]
 const AP2_OPTIONS = [{ value: 'none', label: '— None —' }, ...DIM_OPTIONS]
-
-// Chart dimension choices — only parameters that make sense as chart axes
-const CHART_DIM_OPTIONS = [
-  { value: 'business_segment',    label: 'Business Segment' },
-  { value: 'zone_name',           label: 'Zone'             },
-  { value: 'cluster_name',        label: 'Cluster'          },
-  { value: 'region_name',         label: 'Region'           },
-  { value: 'area_name',           label: 'Unit'             },
-  { value: 'branch_name',         label: 'Branch'           },
-  { value: 'state_id',            label: 'Branch State'     },
-  { value: 'prod_classification', label: 'Prod. Class'      },
-]
 
 // ── Formatters ─────────────────────────────────────────────────────────────────
 function fmtInr(v: number): string {
@@ -164,7 +147,6 @@ export function Disbursement() {
   const [ap2, setAp2] = useState('none')
   const [sortField, setSortField] = useState<SortField>('mtd_amount')
   const [sortDir,   setSortDir]   = useState<'asc' | 'desc'>('desc')
-  const [chartDim,  setChartDim]  = useState('business_segment')
 
   const slicerParams = useSlicerParams()
 
@@ -189,12 +171,6 @@ export function Disbursement() {
     queryFn:  () => api.get('/api/disbursement/refresh').then((r) => r.data),
   })
 
-  // Chart 1 — own dimension (slicer-filtered, independent of AP#1)
-  const { data: chartRows = [] } = useQuery<GroupRow[]>({
-    queryKey: ['disb-chart', chartDim, slicerParams],
-    queryFn:  () => api.get('/api/disbursement/group-summary', { params: { ...slicerParams, group_by: chartDim } }).then((r) => r.data),
-  })
-
   const handleSort = (field: SortField) => {
     if (field === sortField) setSortDir((d) => d === 'asc' ? 'desc' : 'asc')
     else { setSortField(field); setSortDir('desc') }
@@ -217,20 +193,6 @@ export function Disbursement() {
   // Consistent units: one for disbursed Amount, one for Avg ticket (shown in headers).
   const amtUnit = useMemo(() => inrUnit(tableRows.flatMap((r) => [r.t1_amount, r.mtd_amount])), [tableRows])
   const avgUnit = useMemo(() => inrUnit(tableRows.flatMap((r) => [r.t1_avg, r.mtd_avg])), [tableRows])
-
-  const chartData = useMemo(() =>
-    chartRows
-      .filter((r) => r.name !== 'Grand Total')
-      .sort((a, b) => b.mtd_amount - a.mtd_amount)
-      .slice(0, 15)
-      .map((r) => ({
-        name: r.name.length > 18 ? r.name.slice(0, 16) + '…' : r.name,
-        mtd:  +(r.mtd_amount / 1e7).toFixed(2),
-        ytd:  +((r.ytd_amount ?? 0) / 1e7).toFixed(2),
-      })),
-  [chartRows])
-
-
 
   const ap1Label  = DIM_OPTIONS.find((o) => o.value === ap1)?.label ?? ''
   const ap2Label  = DIM_OPTIONS.find((o) => o.value === ap2)?.label ?? ''
@@ -418,42 +380,6 @@ export function Disbursement() {
           </Box>
         )}
       </Paper>
-
-      {/* ── Charts — exactly two: Amount by <dim> (bar) + Disbursement Trend (line) ── */}
-      <Box className="grid grid-cols-1 xl:grid-cols-2 gap-3">
-        <Paper sx={{ overflow: 'hidden' }}>
-          <Box sx={{
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1,
-            px: 2.5, py: 1, borderBottom: '1px solid rgba(0,0,0,0.06)', background: '#FAFBFF',
-          }}>
-            <Box sx={{ fontWeight: 700, fontSize: '0.85rem', color: '#1E293B' }}>
-              Disbursement by {CHART_DIM_OPTIONS.find((o) => o.value === chartDim)?.label} (₹ Cr)
-            </Box>
-            <DimSelect label="By" value={chartDim} options={CHART_DIM_OPTIONS} onChange={setChartDim} minWidth={130} />
-          </Box>
-          <Box sx={{ p: 2, height: Math.max(280, chartData.length * 56) }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={chartData} layout="vertical" margin={{ top: 4, right: 72, left: chartDim === 'business_segment' ? 30 : 76, bottom: 4 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.05)" horizontal={false} />
-                <XAxis type="number" tick={{ fill: '#64748B', fontSize: 10 }} axisLine={{ stroke: 'rgba(0,0,0,0.1)' }} tickLine={false} />
-                <YAxis type="category" dataKey="name" tick={{ fill: '#475569', fontSize: 10 }} axisLine={false} tickLine={false} width={chartDim === 'business_segment' ? 44 : 110} />
-                <RTooltip
-                  contentStyle={{ background: '#fff', border: '1px solid rgba(0,0,0,0.1)', borderRadius: 8, fontSize: 11 }}
-                  formatter={(v: number, n: string) => [`₹${v.toFixed(2)} Cr`, n]}
-                />
-                <Legend wrapperStyle={{ fontSize: 10, color: '#64748B' }} />
-                <Bar dataKey="mtd" name="MTD (₹ Cr)" fill="#16A34A" barSize={14} radius={[0, 4, 4, 0]} isAnimationActive={false}>
-                  <LabelList dataKey="mtd" content={<SingleLineBarLabel fill="#15803D" formatter={(v: number) => v > 0 ? `₹${v.toFixed(1)} Cr` : ''} />} />
-                </Bar>
-                <Bar dataKey="ytd" name="YTD FY (₹ Cr)" fill="#1565C0" barSize={14} radius={[0, 4, 4, 0]} isAnimationActive={false}>
-                  <LabelList dataKey="ytd" content={<SingleLineBarLabel fill="#1E40AF" formatter={(v: number) => v > 0 ? `₹${v.toFixed(1)} Cr` : ''} />} />
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </Box>
-        </Paper>
-
-      </Box>
 
       {/* Disbursement is a point-in-time event, unaffected by write-off status,
           so the trend is fixed to one view (no W/O toggle); AP#1/AP#2 drive it. */}

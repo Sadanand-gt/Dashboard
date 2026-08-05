@@ -16,13 +16,8 @@ import MenuItem from '@mui/material/MenuItem'
 import FormControl from '@mui/material/FormControl'
 import Divider from '@mui/material/Divider'
 import Tooltip from '@mui/material/Tooltip'
-import {
-  BarChart, Bar, XAxis, YAxis, Tooltip as RTooltip, Legend,
-  ResponsiveContainer, Cell, CartesianGrid, LineChart, Line, LabelList,
-} from 'recharts'
 import { api } from '../api/client'
 import { KpiCard } from '../components/KpiCard'
-import { SingleLineBarLabel } from '../components/SingleLineBarLabel'
 import { useSlicerParams } from '../store/filterStore'
 import type { AumKpis } from '../api/types'
 import { TrendSection } from '../components/TrendSection'
@@ -30,7 +25,6 @@ import { TrendSection } from '../components/TrendSection'
 const SEGMENT_COLORS: Record<string, string> = {
   IEL: '#1565C0', JLG: '#16A34A', LAP: '#7C3AED',
 }
-const PRODUCT_PALETTE = ['#1565C0', '#16A34A', '#7C3AED', '#D97706', '#DC2626', '#0891B2', '#DB2777']
 
 // ── 23 analysis parameters (AP#1 + AP#2 — mirrors Excel "Analysis Parameters") ──
 const DIM_OPTIONS = [
@@ -61,20 +55,6 @@ const DIM_OPTIONS = [
   { value: 'lender_id',           label: 'Lender ID'              },
 ]
 const AP2_OPTIONS = [{ value: 'none', label: '— None —' }, ...DIM_OPTIONS]
-
-// Chart dimension choices — only parameters that make sense as chart axes
-const CHART_DIM_OPTIONS = [
-  { value: 'business_segment',    label: 'Business Segment' },
-  { value: 'zone_label',          label: 'Zone'             },
-  { value: 'cluster_label',       label: 'Cluster'          },
-  { value: 'region_label',        label: 'Region'           },
-  { value: 'area_label',          label: 'Unit'             },
-  { value: 'branch_label',        label: 'Branch'           },
-  { value: 'lo_name',             label: 'Loan Officer'     },
-  { value: 'state_id',            label: 'Branch State'     },
-  { value: 'prod_classification', label: 'Prod. Class'      },
-  { value: 'dpd_bucket',          label: 'OD Bucket'        },
-]
 
 // ── Formatters ────────────────────────────────────────────────────────────────
 function fmtInr(v: number): string {
@@ -136,7 +116,6 @@ export function AumStatus() {
   const [ap1, setAp1] = useState('business_segment')
   const [ap2, setAp2] = useState('none')
   const [includeWO, setIncludeWO] = useState(true)
-  const [chartDim, setChartDim] = useState('business_segment')
 
   const slicerParams = useSlicerParams()
 
@@ -160,11 +139,6 @@ export function AumStatus() {
     queryKey: ['aum-group', tableQueryParams],
     queryFn: () => api.get('/api/aum/group-summary', { params: tableQueryParams }).then((r) => r.data),
   })
-  // Chart 1 data — AUM by <chartDim> (slicer-filtered, own dimension toggle)
-  const { data: productRows = [] } = useQuery<GroupRow[]>({
-    queryKey: ['aum-by-dim', chartDim, params],
-    queryFn: () => api.get('/api/aum/group-summary', { params: { ...params, group_by: chartDim } }).then((r) => r.data),
-  })
   const { data: refreshData } = useQuery<{ refresh: string }>({
     queryKey: ['aum-refresh'],
     queryFn: () => api.get('/api/aum/refresh').then((r) => r.data),
@@ -185,17 +159,6 @@ export function AumStatus() {
     if (field === sortField) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
     else { setSortField(field); setSortDir('desc') }
   }
-
-  const productData = useMemo(() =>
-    productRows.filter((r) => r.name !== 'Grand Total')
-      .map((r) => ({
-        name: r.name.length > 18 ? r.name.slice(0, 16) + '…' : r.name,
-        pos: +(r.pos / 1e7).toFixed(2),
-        loans: r.loans,
-      }))
-      .sort((a, b) => b.pos - a.pos)
-      .slice(0, 15),
-  [productRows])
 
   const ap1Label = DIM_OPTIONS.find((o) => o.value === ap1)?.label ?? 'Segment'
   const ap2Label = DIM_OPTIONS.find((o) => o.value === ap2)?.label ?? ''
@@ -295,39 +258,6 @@ export function AumStatus() {
           </Box>
         )}
       </Paper>
-
-      {/* Charts — exactly two: AUM by <dim> (bar) + AUM Trend (line) */}
-      <Box className="grid grid-cols-1 xl:grid-cols-2 gap-3">
-        <Paper sx={{ overflow: 'hidden' }}>
-          <Box sx={{
-            display: 'flex', alignItems: 'center', justifyContent: 'space-between', gap: 1,
-            px: 2.5, py: 1, borderBottom: '1px solid rgba(0,0,0,0.06)', background: '#FAFBFF',
-          }}>
-            <Box sx={{ fontWeight: 700, fontSize: '0.85rem', color: '#1E293B' }}>
-              AUM by {CHART_DIM_OPTIONS.find((o) => o.value === chartDim)?.label} (₹ Cr)
-            </Box>
-            <DimSelect label="By" value={chartDim} options={CHART_DIM_OPTIONS} onChange={setChartDim} minWidth={130} />
-          </Box>
-          <Box sx={{ p: 2, height: Math.max(260, productData.length * 44) }}>
-            <ResponsiveContainer width="100%" height="100%">
-              <BarChart data={productData} layout="vertical" margin={{ top: 4, right: 64, left: chartDim === 'business_segment' ? 30 : 76, bottom: 4 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke="rgba(0,0,0,0.05)" horizontal={false} />
-                <XAxis type="number" tick={{ fill: '#64748B', fontSize: 10 }} axisLine={{ stroke: 'rgba(0,0,0,0.1)' }} tickLine={false} />
-                <YAxis type="category" dataKey="name" tick={{ fill: '#475569', fontSize: 11 }} axisLine={false} tickLine={false} width={chartDim === 'business_segment' ? 44 : 110} />
-                <RTooltip
-                  contentStyle={{ background: '#fff', border: '1px solid rgba(0,0,0,0.1)', borderRadius: 8, fontSize: 11 }}
-                  formatter={(v: number) => [`₹${v.toFixed(2)} Cr`, 'AUM']}
-                />
-                <Bar dataKey="pos" name="AUM (₹ Cr)" radius={[0, 4, 4, 0]} barSize={22} isAnimationActive={false}>
-                  {productData.map((d, i) => <Cell key={i} fill={SEGMENT_COLORS[d.name] ?? PRODUCT_PALETTE[i % PRODUCT_PALETTE.length]} />)}
-                  <LabelList dataKey="pos" content={<SingleLineBarLabel fill="#334155" formatter={(v: number) => `₹${v.toFixed(1)} Cr`} />} />
-                </Bar>
-              </BarChart>
-            </ResponsiveContainer>
-          </Box>
-        </Paper>
-
-      </Box>
 
       {/* One portfolio control for the whole page: the KPI cards, the Analysis
           Parameter table and the trend all follow `includeWO`. AP#1/AP#2 drive
