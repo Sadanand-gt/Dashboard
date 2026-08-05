@@ -172,6 +172,71 @@ def run_report(report_key: str, sql_file: str, table_name: str) -> bool:
         return False
 
 
+def run_credit_bureau() -> bool:
+    """Credit Bureau & Sourcing — the ONLY report sourced from a different
+    DATABASE (cb_engine), so it cannot use run_sql_file / the core engine.
+
+    The bureau facts are keyed by branch NAME while the hierarchy lives in the
+    core DB; Postgres cannot join across databases, so the merge happens here in
+    pandas. Branches the bureau reports but the core master does not carry
+    (partner branches, Corporate Office, closed branches — ~6% of pulls) resolve
+    to 'Unassigned', matching every other report's convention.
+    """
+    key, table = "credit_bureau", "rpt_credit_bureau"
+    log.info(f"[START] {key}")
+    try:
+        import os
+        from sqlalchemy import text as _sql_text
+        from pipeline.db import get_cb_engine, _get_engine, QUERY_DIR
+
+        sql = open(os.path.join(QUERY_DIR, "credit_bureau.sql"), encoding="utf-8").read()
+        with get_cb_engine().connect() as conn:
+            df = pd.read_sql(_sql_text(sql), conn)
+        log.info(f"    cb_engine returned {len(df)} rows")
+        if df.empty:
+            raise RuntimeError("credit_bureau produced no rows — refusing to write")
+
+        with _get_engine().connect() as conn:
+            hier = pd.read_sql(_sql_text("""
+                SELECT bm.branch_id, bm.branch_name, a.area_name,
+                       reg.branch_name AS region_name, clus.area_name AS cluster_name,
+                       z.area_name AS zone_name, bm.state_id, bm.district_id
+                FROM public.brnch_master bm
+                LEFT JOIN public.area_master  a    ON bm.area_id   = a.area_id
+                LEFT JOIN public.brnch_master reg  ON bm.region_id = reg.branch_id
+                LEFT JOIN public.area_master  clus ON reg.area_id  = clus.area_id
+                LEFT JOIN public.area_master  z    ON clus.zone_id = z.area_id
+                WHERE bm.active = 'Y' AND bm.is_region = 'N'
+                  AND bm.branch_name <> 'DEMO' AND bm.closing_date IS NULL
+            """), conn)
+
+        # Case/space-insensitive name match — the two systems disagree on casing.
+        df["_k"] = df["cb_branch"].astype(str).str.strip().str.upper()
+        hier["_k"] = hier["branch_name"].astype(str).str.strip().str.upper()
+        merged = df.merge(hier.drop_duplicates("_k"), on="_k", how="left").drop(columns=["_k"])
+
+        matched = merged["branch_id"].notna().sum()
+        log.info(f"    branch match: {matched}/{len(merged)} rows "
+                 f"({100 * matched / max(len(merged), 1):.1f}%)")
+
+        merged["branch_name"] = merged["branch_name"].fillna(merged["cb_branch"])
+        for c in ["zone_name", "cluster_name", "region_name", "area_name"]:
+            merged[c] = merged[c].fillna("Unassigned")
+        merged["branch_id"] = merged["branch_id"].fillna("N/A")
+        for c in ["state_id", "district_id"]:
+            merged[c] = merged[c].astype("object").where(merged[c].notna(), "N/A").astype(str)
+
+        write_report(merged, table, mode="replace")
+        archive_report(merged, table)
+        write_pipeline_log(key, "SUCCESS")
+        log.info(f"[OK]    {key} → {table} ({len(merged)} rows)")
+        return True
+    except Exception as e:
+        log.error(f"[FAIL]  {key} — {e}")
+        write_pipeline_log(key, "FAILED", str(e))
+        return False
+
+
 # ── Split reports (IL + JLG run separately, combined in Python) ────────────────
 def run_bucket_movement() -> bool:
     """Bucket movement — run IL + JLG queries and stack the rows."""
@@ -486,6 +551,7 @@ SPLIT_REPORTS = {
     "trend_full":      run_trend_full,
     "mtd_flow":        run_mtd_flow,
     "dpd_snapshot":    run_dpd_snapshot,
+    "credit_bureau":   run_credit_bureau,   # sourced from the cb_engine DATABASE
 }
 
 

@@ -35,6 +35,9 @@ interface AgeingKpis { total_pos: number; od_amt: number; od_pct: number; loans_
 interface OdKpis { slippage: number; continuing: number; regularized: number; not_od: number }
 interface WoKpis { total_amount: number; recovery_amount: number; net_loss: number; recovery_pct: number }
 interface Series { labels: string[]; rows: { name: string; values: (number | null)[] }[]; grand: (number | null)[] }
+interface CbGrand { pulls: number; approval_rate: number; with_overdue_lender: number; overdue_lender_pct: number; avg_outstanding: number; obligation_pct: number }
+interface OtsGrand { ots_count: number; ots_amount: number; total_waiver: number; net_amount_collected: number; recovery_pct: number }
+interface SummaryResp<T> { rows: unknown[]; grand: T }
 
 // ── Formatters ────────────────────────────────────────────────────────────────
 function inr(v: number | undefined | null): string {
@@ -104,8 +107,45 @@ export function Summary() {
   const disbTrend = useSeries('disb_amount', 12, portfolio)
   const slipTrend = useSeries('slip_count', 12, portfolio)
 
+  // Front of the funnel (bureau sourcing) and back of it (OTS recovery). Neither
+  // is portfolio-toggled: a bureau pull predates any loan, and an OTS is its own
+  // resolution path.
+  const cb = useQuery<SummaryResp<CbGrand>>({
+    queryKey: ['exec-cb'],
+    queryFn: () => api.get('/api/credit-bureau/summary', { params: { group_by: 'decision' } }).then((r) => r.data),
+  })
+  const ots = useQuery<SummaryResp<OtsGrand>>({
+    queryKey: ['exec-ots'],
+    queryFn: () => api.get('/api/ots/summary', { params: { group_by: 'settle_bucket' } }).then((r) => r.data),
+  })
+
+  const branches = useQuery<SegRow[]>({
+    queryKey: ['aum-branch', aumP],
+    queryFn: () => api.get('/api/aum/group-summary', { params: { ...aumP, group_by: 'branch_name' } }).then((r) => r.data),
+  })
+
   const a = aum.data
   const segRows = (seg.data ?? []).filter((r) => r.name !== 'Grand Total')
+  const branchRows = (branches.data ?? []).filter((r) => r.name !== 'Grand Total')
+
+  // Every delta on this page compares the latest month with the one before it —
+  // name that month rather than showing a bare arrow.
+  const labels = aumTrend.data?.labels ?? []
+  const basis = labels.length >= 2 ? `vs ${labels[labels.length - 2]}` : undefined
+
+  // Portfolio-quality watchlist: branches carrying the most POS above a PAR 30+
+  // threshold. Ranked by rupees at risk, not by percentage, so a small branch
+  // with a bad ratio does not outrank a large one.
+  const PAR30_LIMIT = 5
+  const watchlist = branchRows
+    .filter((r) => r.par30_pct > PAR30_LIMIT && r.pos > 0)
+    .map((r) => ({ ...r, at_risk: (r.pos * r.par30_pct) / 100 }))
+    .sort((x, y) => y.at_risk - x.at_risk)
+    .slice(0, 6)
+  const watchPos = watchlist.reduce((t, r) => t + r.pos, 0)
+
+  const avgTicket = a && a.total_loans ? a.total_pos / a.total_loans : 0
+  const activeBranches = branchRows.length
 
   return (
     <Box sx={{ pb: 4 }}>
@@ -137,13 +177,82 @@ export function Summary() {
 
       {/* ── Hero KPI band ──────────────────────────────────────────────────── */}
       <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2,1fr)', md: 'repeat(3,1fr)', lg: 'repeat(6,1fr)' }, gap: 1.5, mb: 3 }}>
-        <Kpi accent={C.blue}   label="Total AUM"        value={inr(a?.total_pos)}   sub={`${num(a?.total_loans)} loans`} deltaPct={delta(aumTrend.data?.grand)} />
-        <Kpi accent={C.green}  label="MTD Coll. Eff."   value={pct(collExcl.data?.mtd_ce)} sub={`${portfolio === 'with' ? 'With' : 'Excl.'} W/O · collection ÷ demand`} deltaPp={ppDelta(ceTrend.data?.grand)} good="up" />
+        <Kpi accent={C.blue}   label="Total AUM"        value={inr(a?.total_pos)}   sub={`${num(a?.total_loans)} loans`} deltaPct={delta(aumTrend.data?.grand)} basis={basis} />
+        <Kpi accent={C.green}  label="MTD Coll. Eff."   value={pct(collExcl.data?.mtd_ce)} sub={`${portfolio === 'with' ? 'With' : 'Excl.'} W/O · collection ÷ demand`} deltaPp={ppDelta(ceTrend.data?.grand)} good="up" basis={basis} />
         <Kpi accent={C.amber}  label="PAR 30+"          value={pct(a?.par30_pct)}   sub={inr(a?.par30_pos)} good="down" />
         <Kpi accent={C.red}    label="PAR 90+"          value={pct(a?.par90_pct)}   sub={inr(a?.par90_pos)} good="down" />
-        <Kpi accent={C.teal}   label="MTD Disbursement" value={inr(disb.data?.mtd_amount)} sub={`${num(disb.data?.mtd_count)} loans`} deltaPct={delta(disbTrend.data?.grand)} good="up" />
+        <Kpi accent={C.teal}   label="MTD Disbursement" value={inr(disb.data?.mtd_amount)} sub={`${num(disb.data?.mtd_count)} loans`} deltaPct={delta(disbTrend.data?.grand)} good="up" basis={basis} />
         <Kpi accent={C.purple} label="Net Write-off"    value={inr(wo.data?.net_loss)}  sub={`${pct(wo.data?.recovery_pct)} recovered`} good="down" />
       </Box>
+
+      {/* ── Quick ratios ───────────────────────────────────────────────────── */}
+      <Box sx={{
+        display: 'grid', gridTemplateColumns: { xs: 'repeat(2,1fr)', sm: 'repeat(3,1fr)', lg: 'repeat(6,1fr)' },
+        gap: 1, mb: 3, background: '#FFFFFF', border: `1px solid ${C.border}`, borderRadius: 2.5, p: 1.25,
+      }}>
+        <MiniStat label="Avg Ticket Size" value={inr(avgTicket)} sub="POS ÷ live loans" />
+        <MiniStat label="PAR 0+" value={pct(a?.par0_pct)} sub={inr(a?.par0_pos)} />
+        <MiniStat label="OD Slippage" value={num(od.data?.slippage)} sub="regular → OD this month" />
+        <MiniStat label="Regularised" value={num(od.data?.regularized)} sub="OD → regular this month" />
+        <MiniStat label="Active Branches" value={num(activeBranches)} sub="with live outstanding" />
+        <MiniStat label="MTD Demand" value={inr(collExcl.data?.mtd_demand)} sub={`collected ${inr(collExcl.data?.mtd_collection)}`} />
+      </Box>
+
+      {/* ── Sourcing & recovery — the two ends of the loan lifecycle ───────── */}
+      <Box sx={{ display: 'grid', gridTemplateColumns: { xs: 'repeat(2,1fr)', md: 'repeat(4,1fr)' }, gap: 1.5, mb: 3 }}>
+        <Kpi accent={C.teal} label="Bureau Approval Rate"
+          value={cb.data ? pct(cb.data.grand.approval_rate) : '—'}
+          sub={cb.data ? `${num(cb.data.grand.pulls)} pulls screened` : ''} good="up" />
+        <Kpi accent={C.amber} label="Applicants w/ Overdue Lender"
+          value={cb.data ? pct(cb.data.grand.overdue_lender_pct) : '—'}
+          sub={cb.data ? `${num(cb.data.grand.with_overdue_lender)} of screened` : ''} good="down" />
+        <Kpi accent={C.green} label="OTS Cash Recovery"
+          value={ots.data ? pct(ots.data.grand.recovery_pct) : '—'}
+          sub={ots.data ? `${inr(ots.data.grand.net_amount_collected)} of ${inr(ots.data.grand.ots_amount)} settled` : ''} good="up" />
+        <Kpi accent={C.purple} label="Write-off Recovery"
+          value={wo.data ? pct(wo.data.recovery_pct) : '—'}
+          sub={wo.data ? `${inr(wo.data.recovery_amount)} recovered` : ''} good="up" />
+      </Box>
+
+      {/* ── Portfolio-quality watchlist ────────────────────────────────────── */}
+      {watchlist.length > 0 && (
+        <Paper elevation={0} sx={{ borderRadius: 2.5, border: '1px solid #FECACA', mb: 3, overflow: 'hidden' }}>
+          <Box sx={{ px: 2, py: 1.1, background: '#FEF2F2', display: 'flex', alignItems: 'baseline', gap: 1.5, flexWrap: 'wrap' }}>
+            <Box sx={{ fontSize: '0.86rem', fontWeight: 800, color: '#991B1B' }}>
+              Branches above {PAR30_LIMIT}% PAR 30+
+            </Box>
+            <Box sx={{ fontSize: '0.7rem', color: '#B91C1C' }}>
+              {watchlist.length} of {activeBranches} branches · {inr(watchPos)} outstanding
+            </Box>
+          </Box>
+          <Box sx={{ overflowX: 'auto' }}>
+            <Table size="small">
+              <TableHead>
+                <TableRow sx={{ '& th': { background: '#FFF7F7', fontWeight: 700, fontSize: '0.66rem', color: '#991B1B', whiteSpace: 'nowrap' } }}>
+                  <TableCell>Branch</TableCell>
+                  <TableCell align="right">Outstanding</TableCell>
+                  <TableCell align="right">Loans</TableCell>
+                  <TableCell align="right">PAR 30+</TableCell>
+                  <TableCell align="right">PAR 90+</TableCell>
+                  <TableCell align="right">POS at Risk (30+)</TableCell>
+                </TableRow>
+              </TableHead>
+              <TableBody>
+                {watchlist.map((r) => (
+                  <TableRow key={r.name} hover>
+                    <TableCell sx={{ fontWeight: 600, fontSize: '0.74rem', whiteSpace: 'nowrap' }}>{r.name}</TableCell>
+                    <TableCell align="right" sx={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '0.72rem' }}>{inr(r.pos)}</TableCell>
+                    <TableCell align="right" sx={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '0.72rem' }}>{num(r.loans)}</TableCell>
+                    <TableCell align="right"><RiskTag v={r.par30_pct} /></TableCell>
+                    <TableCell align="right"><RiskTag v={r.par90_pct} /></TableCell>
+                    <TableCell align="right" sx={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '0.72rem', fontWeight: 700, color: C.red }}>{inr(r.at_risk)}</TableCell>
+                  </TableRow>
+                ))}
+              </TableBody>
+            </Table>
+          </Box>
+        </Paper>
+      )}
 
       {/* ── Row: AUM trend + segment mix ───────────────────────────────────── */}
       <Box sx={{ display: 'grid', gridTemplateColumns: { xs: '1fr', lg: '3fr 2fr' }, gap: 2, mb: 2 }}>
@@ -350,9 +459,12 @@ function toChart(s: Series | undefined, withGrand = false): Record<string, strin
 }
 
 // ── Sub-components ────────────────────────────────────────────────────────────
-function Kpi({ label, value, sub, accent, deltaPct, deltaPp, good }: {
+function Kpi({ label, value, sub, accent, deltaPct, deltaPp, good, basis }: {
   label: string; value: string; sub: string; accent: string
   deltaPct?: number | null; deltaPp?: number | null; good?: 'up' | 'down'
+  /** What the delta is measured against, e.g. "vs Jul-26". A delta with no
+   *  stated basis is not readable — see pmtd-comparison-basis. */
+  basis?: string
 }) {
   const d = deltaPct ?? deltaPp
   const isPp = deltaPp != null
@@ -364,6 +476,7 @@ function Kpi({ label, value, sub, accent, deltaPct, deltaPp, good }: {
     chip = (
       <Box sx={{ fontSize: '0.62rem', fontWeight: 700, color, display: 'inline-flex', alignItems: 'center', gap: '2px' }}>
         {positive ? '▲' : '▼'} {Math.abs(d).toFixed(isPp ? 2 : 1)}{isPp ? ' pp' : '%'}
+        {basis && <Box component="span" sx={{ color: C.muted, fontWeight: 600 }}>&nbsp;{basis}</Box>}
       </Box>
     )
   }

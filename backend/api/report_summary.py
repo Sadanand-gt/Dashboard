@@ -82,6 +82,37 @@ SPECS: dict = {
                    "par30_pct": ("par30_pos", "total_pos")},
         "date_col": "report_date",
     },
+    "credit_bureau": {
+        "table": "rpt_credit_bureau",
+        # Sourced from the cb_engine DATABASE; hierarchy merged in by the pipeline.
+        "dims": {**COMMON_DIMS,
+                 "business_segment": ("Branch", "branch_name"),   # no segment on bureau pulls
+                 "decision":         ("Decision",        "decision"),
+                 "client_category":  ("Client Category", "client_category"),
+                 "pull_month":       ("Pull Month",      "pull_month"),
+                 "pull_year":        ("Pull Year",       "pull_year"),
+                 "cb_branch":        ("Bureau Branch",   "cb_branch")},
+        "sums": ["pulls", "approved_pulls", "rejected_pulls", "referred_pulls", "mfi_outstanding", "ru_outstanding", "rs_lts_outstanding",
+                 "total_outstanding", "total_overdue", "mfi_lenders_sum",
+                 "overdue_mfi_lenders_sum", "other_lenders_sum", "with_overdue_lender",
+                 "emi_other", "monthly_income", "max_eligibility", "with_income"],
+        # Averages per pull, plus the obligation-to-income ratio. The source column
+        # named "FOIR" is NOT a ratio (it holds Approve/Refer), so this is derived
+        # from the real EMI and income sums instead.
+        "ratios": {"approval_rate":       ("approved_pulls",          "pulls"),
+                   "rejection_rate":      ("rejected_pulls",          "pulls"),
+                   "overdue_lender_pct":  ("with_overdue_lender",     "pulls"),
+                   "obligation_pct":      ("emi_other",               "monthly_income"),
+                   "overdue_pct":         ("total_overdue",           "total_outstanding")},
+        # Plain per-pull averages — counts and rupees, NOT percentages.
+        "averages": {"avg_mfi_lenders":   ("mfi_lenders_sum",         "pulls"),
+                     "avg_other_lenders": ("other_lenders_sum",       "pulls"),
+                     "avg_outstanding":   ("total_outstanding",       "pulls"),
+                     "avg_emi_other":     ("emi_other",               "pulls")},
+        "date_col": "report_day",
+        "filter_col": "pull_year",
+        "filter_label": "Pull Year",
+    },
     "ots": {
         "table": "rpt_ots",
         # business_segment is a REAL column here (IEL / LAP / JLG) — override the
@@ -155,10 +186,12 @@ def _filters(
     prod_class: Optional[str] = Query(None), loan_status: Optional[str] = Query(None),
     portfolio: Optional[str] = Query(None),  # with | without (Excl W/O)
     pick: Optional[str] = Query(None),       # value for the spec's filter_col
+    decision: Optional[str] = Query(None),   # bureau outcome (credit_bureau only)
 ) -> dict:
     return {"segment": segment, "zone": zone, "cluster": cluster, "region": region,
             "area": area, "branch": branch, "prod_class": prod_class,
-            "loan_status": loan_status, "portfolio": portfolio, "pick": pick}
+            "loan_status": loan_status, "portfolio": portfolio, "pick": pick,
+            "decision": decision}
 
 
 def _summary(key: str, group_by: str, group_by_2: Optional[str],
@@ -210,6 +243,8 @@ def _summary(key: str, group_by: str, group_by_2: Optional[str],
               area=f.get("area"), branch=f.get("branch"), zone=f.get("zone"))
     df = multi(df, "product_id", f.get("prod_class"))
     df = multi(df, "loan_status", f.get("loan_status"))
+    # no-ops on tables without the column, so it is safe for every spec
+    df = multi(df, "decision", f.get("decision"))
     if df.empty:
         return {**empty, "as_of": as_of}
 
@@ -226,10 +261,18 @@ def _summary(key: str, group_by: str, group_by_2: Optional[str],
     for c in sums:
         df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
 
+    # "ratios" are PERCENTAGES (x100). "averages" are plain num/den — a per-pull
+    # lender count or an average rupee amount must NOT be multiplied by 100
+    # (avg_mfi_lenders rendered as 147.25 instead of 1.47 before this split).
+    averages = spec.get("averages", {})
+
     def derive(rec: dict) -> dict:
         for name, (num, den) in spec["ratios"].items():
             n, d = float(rec.get(num, 0) or 0), float(rec.get(den, 0) or 0)
             rec[name] = round(n / d * 100, 2) if d else 0.0
+        for name, (num, den) in averages.items():
+            n, d = float(rec.get(num, 0) or 0), float(rec.get(den, 0) or 0)
+            rec[name] = round(n / d, 2) if d else 0.0
         return rec
 
     keys = [g1] + ([g2] if g2 else [])
@@ -271,3 +314,4 @@ router.add_api_route("/delinquencies/summary", _make("delinquencies"), methods=[
 router.add_api_route("/case-movement/summary", _make("case_movement"), methods=["GET"])
 router.add_api_route("/writeoff/summary", _make("writeoff"), methods=["GET"])
 router.add_api_route("/ots/summary", _make("ots"), methods=["GET"])
+router.add_api_route("/credit-bureau/summary", _make("credit_bureau"), methods=["GET"])

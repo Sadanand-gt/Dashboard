@@ -52,6 +52,35 @@ def _get_engine():
     )
 
 
+# ── Credit-bureau engine (separate DATABASE, same instance) ───────────────────
+# The bureau decision engine writes to its own database, `cb_engine`, on the same
+# server as the core replica — so host/port/user/password are shared and only the
+# dbname differs. CB_* env vars override any of them if that ever stops being true.
+def _get_cb_url() -> str:
+    host     = os.getenv("CB_PG_HOST",     os.getenv("PG_HOST", "localhost"))
+    port     = os.getenv("CB_PG_PORT",     os.getenv("PG_PORT", "5432"))
+    dbname   = os.getenv("CB_PG_DBNAME",   "cb_engine")
+    user     = os.getenv("CB_PG_USER",     os.getenv("PG_USER", ""))
+    password = os.getenv("CB_PG_PASSWORD", os.getenv("PG_PASSWORD", ""))
+    return (
+        f"postgresql+psycopg2://"
+        f"{quote_plus(user)}:{quote_plus(password)}"
+        f"@{host}:{port}/{dbname}"
+    )
+
+
+def get_cb_engine():
+    """Engine for the cb_engine database. equifax_history holds ~138M rows, so
+    every query against it must be bounded — never scan it unfiltered."""
+    return create_engine(
+        _get_cb_url(),
+        connect_args={"options": "-c search_path=public -c statement_timeout=600000"},
+        pool_pre_ping=True,
+        pool_size=1,
+        max_overflow=0,
+    )
+
+
 # ── SQL file execution with retry ─────────────────────────────────────────────
 def run_sql_file(filename: str, params: dict = None, subs: dict = None,
                  max_retries: int = 3, retry_delay: int = 60) -> pd.DataFrame:

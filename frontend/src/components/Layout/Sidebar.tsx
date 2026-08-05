@@ -26,6 +26,7 @@ import CreditCardIcon from '@mui/icons-material/CreditCard'
 import ShowChartIcon from '@mui/icons-material/ShowChart'
 import GppMaybeIcon from '@mui/icons-material/GppMaybe'
 import HandshakeIcon from '@mui/icons-material/Handshake'
+import FactCheckIcon from '@mui/icons-material/FactCheck'
 import ChevronLeftIcon from '@mui/icons-material/ChevronLeft'
 import ChevronRightIcon from '@mui/icons-material/ChevronRight'
 import MenuIcon from '@mui/icons-material/Menu'
@@ -68,6 +69,7 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Monthly Trend',       path: '/dashboard/trend',          icon: <ShowChartIcon fontSize="small" /> },
   { label: 'AML Risk Category',   path: '/dashboard/aml',            icon: <GppMaybeIcon fontSize="small" /> },
   { label: 'OTS & Recovery',      path: '/dashboard/ots',            icon: <HandshakeIcon fontSize="small" /> },
+  { label: 'Credit Bureau',       path: '/dashboard/credit-bureau',  icon: <FactCheckIcon fontSize="small" /> },
 ]
 
 const ADMIN_ITEMS: NavItem[] = [

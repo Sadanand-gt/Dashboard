@@ -21,6 +21,7 @@ import { Cashless } from './pages/Cashless'
 import { TrendMonthly } from './pages/TrendMonthly'
 import { AmlRiskCategory } from './pages/AmlRiskCategory'
 import { Ots } from './pages/Ots'
+import { CreditBureau } from './pages/CreditBureau'
 import { UserManagement } from './pages/admin/UserManagement'
 import { Summary } from './pages/Summary'
 
@@ -58,6 +59,7 @@ export default function App() {
           <Route path="/dashboard/trend" element={<TrendMonthly />} />
           <Route path="/dashboard/aml" element={<AmlRiskCategory />} />
           <Route path="/dashboard/ots" element={<Ots />} />
+          <Route path="/dashboard/credit-bureau" element={<CreditBureau />} />
         </Route>
       </Route>
 
