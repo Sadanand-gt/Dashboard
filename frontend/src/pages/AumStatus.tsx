@@ -22,6 +22,7 @@ import {
 } from 'recharts'
 import { api } from '../api/client'
 import { KpiCard } from '../components/KpiCard'
+import { SingleLineBarLabel } from '../components/SingleLineBarLabel'
 import { useSlicerParams } from '../store/filterStore'
 import type { AumKpis } from '../api/types'
 import { TrendSection } from '../components/TrendSection'
@@ -319,8 +320,7 @@ export function AumStatus() {
                 />
                 <Bar dataKey="pos" name="AUM (₹ Cr)" radius={[0, 4, 4, 0]} barSize={22} isAnimationActive={false}>
                   {productData.map((d, i) => <Cell key={i} fill={SEGMENT_COLORS[d.name] ?? PRODUCT_PALETTE[i % PRODUCT_PALETTE.length]} />)}
-                  <LabelList dataKey="pos" position="right" formatter={(v: number) => `₹${v.toFixed(1)} Cr`}
-                    style={{ fill: '#334155', fontSize: 10, fontWeight: 700 }} />
+                  <LabelList dataKey="pos" content={<SingleLineBarLabel fill="#334155" formatter={(v: number) => `₹${v.toFixed(1)} Cr`} />} />
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
