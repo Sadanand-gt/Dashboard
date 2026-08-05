@@ -20,6 +20,7 @@ import {
   BarChart, Bar, XAxis, YAxis, Tooltip as RTooltip, Legend,
   ResponsiveContainer, CartesianGrid, LineChart, Line, LabelList,
 } from 'recharts'
+import type { LabelProps } from 'recharts'
 import { api } from '../api/client'
 import { KpiCard } from '../components/KpiCard'
 import { useSlicerParams } from '../store/filterStore'
@@ -81,6 +82,30 @@ function fmtUnit(v: number, div: number): string {
   if (v == null || (!v && v !== 0)) return '—'
   if (div === 1) return (v || 0).toLocaleString('en-IN', { maximumFractionDigits: 0 })
   return (v / div).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+}
+
+type BarValueLabelProps = LabelProps & { color: string }
+
+function BarValueLabel({ viewBox, value, color }: BarValueLabelProps) {
+  const amount = Number(value)
+  if (!viewBox || !('x' in viewBox) || !Number.isFinite(amount) || amount <= 0) return null
+
+  const x = Number(viewBox.x ?? 0) + Number(viewBox.width ?? 0) + 5
+  const y = Number(viewBox.y ?? 0) + Number(viewBox.height ?? 0) / 2
+
+  return (
+    <text
+      x={x}
+      y={y}
+      fill={color}
+      fontSize={10}
+      fontWeight={700}
+      dominantBaseline="central"
+      textAnchor="start"
+    >
+      {`₹${amount.toFixed(1)} Cr`}
+    </text>
+  )
 }
 
 // ── Types ──────────────────────────────────────────────────────────────────────
@@ -442,12 +467,10 @@ export function Disbursement() {
                 />
                 <Legend wrapperStyle={{ fontSize: 10, color: '#64748B' }} />
                 <Bar dataKey="mtd" name="MTD (₹ Cr)" fill="#16A34A" barSize={14} radius={[0, 4, 4, 0]} isAnimationActive={false}>
-                  <LabelList dataKey="mtd" position="right" formatter={(v: number) => v > 0 ? `₹${v.toFixed(1)} Cr` : ''}
-                    style={{ fill: '#15803D', fontSize: 10, fontWeight: 700 }} />
+                  <LabelList dataKey="mtd" content={<BarValueLabel color="#15803D" />} />
                 </Bar>
                 <Bar dataKey="ytd" name="YTD FY (₹ Cr)" fill="#1565C0" barSize={14} radius={[0, 4, 4, 0]} isAnimationActive={false}>
-                  <LabelList dataKey="ytd" position="right" formatter={(v: number) => v > 0 ? `₹${v.toFixed(1)} Cr` : ''}
-                    style={{ fill: '#1E40AF', fontSize: 10, fontWeight: 700 }} />
+                  <LabelList dataKey="ytd" content={<BarValueLabel color="#1E40AF" />} />
                 </Bar>
               </BarChart>
             </ResponsiveContainer>
