@@ -1,27 +1,13 @@
-import { useEffect } from 'react'
 import { Outlet, Navigate, useLocation } from 'react-router-dom'
 import Box from '@mui/material/Box'
 import { Sidebar } from './Sidebar'
 import { SlicerPanel } from '../SlicerPanel'
 import { useAuthStore } from '../../store/authStore'
 import { canSeePath, firstAllowedPath } from '../../lib/reportAccess'
-import { api } from '../../api/client'
-import type { User } from '../../api/types'
 
 export function AppShell() {
   const location = useLocation()
-  const { user, token, setAuth } = useAuthStore()
-
-  // Refresh the user profile once per app load so scope / report-visibility
-  // changes made by the admin apply without forcing a re-login.
-  useEffect(() => {
-    if (!token) return
-    api
-      .get<User>('/auth/me')
-      .then((r) => setAuth(r.data, token))
-      .catch(() => {}) // expired token → the 401 interceptor handles logout
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  const { user } = useAuthStore()
 
   // Report-visibility guard: block direct URL access to reports the user
   // cannot see and land them on their first allowed page instead.

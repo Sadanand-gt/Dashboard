@@ -1,4 +1,5 @@
 import axios from 'axios'
+import { useAuthStore } from '../store/authStore'
 
 const BASE_URL = import.meta.env.VITE_API_URL ?? ''
 
@@ -14,12 +15,18 @@ api.interceptors.request.use((config) => {
 })
 
 api.interceptors.response.use(
-  (res) => res,
+  (res) => {
+    if (localStorage.getItem('access_token')) {
+      useAuthStore.getState().touchSession()
+    }
+    return res
+  },
   (err) => {
     if (err.response?.status === 401) {
-      localStorage.removeItem('access_token')
-      localStorage.removeItem('user')
-      window.location.href = '/login'
+      useAuthStore.getState().clearAuth()
+      if (window.location.pathname !== '/login') {
+        window.location.replace('/login')
+      }
     }
     return Promise.reject(err)
   },

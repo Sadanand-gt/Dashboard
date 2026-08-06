@@ -8,9 +8,6 @@ SQLAlchemy>=2.0.0
 # Data
 pandas>=2.0.0
 
-# Scheduler
-APScheduler>=3.10.0
-
 # Dashboard (Plotly Dash)
 dash>=2.17.0
 dash-bootstrap-components>=1.6.0

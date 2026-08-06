@@ -1,3 +1,4 @@
+import { useEffect } from 'react'
 import { Routes, Route, Navigate } from 'react-router-dom'
 import { useAuthStore } from './store/authStore'
 import { PrivateRoute } from './auth/PrivateRoute'
@@ -26,14 +27,37 @@ import { UserManagement } from './pages/admin/UserManagement'
 import { Summary } from './pages/Summary'
 
 export default function App() {
-  const { isAuthenticated } = useAuthStore()
+  const { isAuthenticated, token, sessionExpiresAt, clearAuth } = useAuthStore()
+  const hasActiveClientSession = Boolean(
+    isAuthenticated && token && sessionExpiresAt && sessionExpiresAt > Date.now(),
+  )
+
+  useEffect(() => {
+    if (!isAuthenticated) return
+
+    const expireIfNeeded = () => {
+      const expiresAt = useAuthStore.getState().sessionExpiresAt
+      if (!expiresAt || expiresAt <= Date.now()) clearAuth()
+    }
+    expireIfNeeded()
+
+    const delay = Math.max(0, (sessionExpiresAt ?? 0) - Date.now())
+    const timer = window.setTimeout(clearAuth, delay)
+    window.addEventListener('focus', expireIfNeeded)
+    document.addEventListener('visibilitychange', expireIfNeeded)
+    return () => {
+      window.clearTimeout(timer)
+      window.removeEventListener('focus', expireIfNeeded)
+      document.removeEventListener('visibilitychange', expireIfNeeded)
+    }
+  }, [isAuthenticated, sessionExpiresAt, clearAuth])
 
   return (
     <Routes>
       {/* Public */}
       <Route
         path="/login"
-        element={isAuthenticated ? <Navigate to="/dashboard" replace /> : <Login />}
+        element={hasActiveClientSession ? <Navigate to="/dashboard" replace /> : <Login />}
       />
 
       {/* All authenticated users — page access is governed per user by the
@@ -73,11 +97,11 @@ export default function App() {
       {/* Fallback */}
       <Route
         path="/"
-        element={<Navigate to={isAuthenticated ? '/dashboard' : '/login'} replace />}
+        element={<Navigate to={hasActiveClientSession ? '/dashboard' : '/login'} replace />}
       />
       <Route
         path="*"
-        element={<Navigate to={isAuthenticated ? '/dashboard' : '/login'} replace />}
+        element={<Navigate to={hasActiveClientSession ? '/dashboard' : '/login'} replace />}
       />
     </Routes>
   )

@@ -1,7 +1,7 @@
 import sqlite3
 import pandas as pd
 from .config import (
-    SQLITE_PATH, USERS_DB_PATH,
+    SQLITE_PATH,
     REPORT_BACKEND, REPORT_PG_HOST, REPORT_PG_PORT, REPORT_PG_DBNAME,
     REPORT_PG_SCHEMA, REPORT_PG_USER, REPORT_PG_PASSWORD,
 )
@@ -55,12 +55,6 @@ def reports_conn():
     return sqlite3.connect(SQLITE_PATH, check_same_thread=False)
 
 
-def users_conn():
-    conn = sqlite3.connect(USERS_DB_PATH, check_same_thread=False)
-    conn.row_factory = sqlite3.Row
-    return conn
-
-
 # Report tables carry day-by-day rows in Postgres (report_day = run date);
 # the dashboard always reads the LATEST day. Cache which tables have the
 # column so we probe information_schema only once per table per process.
@@ -110,7 +104,6 @@ def read_report(table: str) -> pd.DataFrame:
         df = scope_df(df, user)
     return df
 
-
 def report_days(table: str) -> list[str]:
     """Every report_day stored for a table, oldest first.
 
@@ -153,42 +146,3 @@ def read_report_at_days(table: str, days: list[str]) -> pd.DataFrame:
         from .scope import scope_df
         df = scope_df(df, user)
     return df
-
-
-def init_users_db() -> None:
-    with users_conn() as conn:
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS users (
-                id            INTEGER PRIMARY KEY AUTOINCREMENT,
-                username      TEXT    UNIQUE NOT NULL,
-                password_hash TEXT    NOT NULL,
-                full_name     TEXT    NOT NULL,
-                role          TEXT    NOT NULL DEFAULT 'analyst',
-                cluster_id    TEXT,
-                region_id    TEXT,
-                area_id       TEXT,
-                branch_id     TEXT,
-                is_active     INTEGER NOT NULL DEFAULT 1,
-                created_at    TEXT    DEFAULT (datetime('now')),
-                last_login    TEXT
-            )
-        """)
-        # ── migrations (idempotent) ──────────────────────────────────────────
-        # Data scope: hierarchy level (ho/zone/cluster/region/area/branch/lo)
-        # + value(s, comma-separated). Replaces the legacy per-level columns.
-        existing = {r[1] for r in conn.execute("PRAGMA table_info(users)")}
-        if "scope_level" not in existing:
-            conn.execute("ALTER TABLE users ADD COLUMN scope_level TEXT")
-        if "scope_value" not in existing:
-            conn.execute("ALTER TABLE users ADD COLUMN scope_value TEXT")
-        # Role rename: 'analyst' → 'officer' (2026-07)
-        conn.execute("UPDATE users SET role='officer' WHERE role='analyst'")
-        # Report visibility whitelist: no rows for a user = all reports allowed.
-        conn.execute("""
-            CREATE TABLE IF NOT EXISTS user_reports (
-                user_id    INTEGER NOT NULL,
-                report_key TEXT    NOT NULL,
-                PRIMARY KEY (user_id, report_key)
-            )
-        """)
-        conn.commit()

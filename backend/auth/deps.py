@@ -1,34 +1,25 @@
 from fastapi import Depends, HTTPException, Request
-from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
-from jose import jwt, JWTError
-from core.config import SECRET_KEY, ALGORITHM
-from core.db import users_conn
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
 from core.reports_catalog import report_for_path
+from .identity import IdentityStoreError, effective_user, get_profile
+from .store import MisStoreError, session_user
 
 bearer = HTTPBearer()
-
-ROLE_HIERARCHY = ["branch_user", "officer", "manager", "admin"]
 
 
 def get_current_user(creds: HTTPAuthorizationCredentials = Depends(bearer)) -> dict:
     try:
-        payload = jwt.decode(creds.credentials, SECRET_KEY, algorithms=[ALGORITHM])
-        user_id: int = int(payload.get("sub"))
-    except (JWTError, TypeError, ValueError):
-        raise HTTPException(status_code=401, detail="Invalid or expired token")
+        mis_user = session_user(creds.credentials)
+        if not mis_user:
+            raise HTTPException(status_code=401, detail="Invalid or expired session")
+        profile = get_profile(mis_user["username"])
+    except (IdentityStoreError, MisStoreError) as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
 
-    with users_conn() as conn:
-        row = conn.execute(
-            "SELECT * FROM users WHERE id=? AND is_active=1", (user_id,)
-        ).fetchone()
-
-    if not row:
-        raise HTTPException(status_code=401, detail="User not found or inactive")
-
-    user = dict(row)
-    if user.get("role") == "analyst":   # legacy value — renamed to 'officer'
-        user["role"] = "officer"
-    return user
+    if not profile or not profile.get("is_active"):
+        raise HTTPException(status_code=401, detail="Ananya Sathi account is inactive or unavailable")
+    return effective_user(mis_user, profile)
 
 
 def require_role(*allowed_roles: str):
@@ -36,7 +27,7 @@ def require_role(*allowed_roles: str):
         if user["role"] not in allowed_roles:
             raise HTTPException(
                 status_code=403,
-                detail=f"Access denied. Required: {', '.join(allowed_roles)}"
+                detail=f"Access denied. Required: {', '.join(allowed_roles)}",
             )
         return user
     return _dep
@@ -48,30 +39,14 @@ require_officer_or_above = require_role("admin", "manager", "officer")
 
 
 async def report_gate(request: Request, user: dict = Depends(get_current_user)) -> dict:
-    """Runs before every /api endpoint (router-wide dependency in main.py).
-
-    1. Stores the user in core.request_ctx so read_report applies the
-       row-level data scope automatically.
-       (Must be async: a sync dependency runs in a threadpool with a COPY
-       of the context, and the contextvar set would be lost.)
-    2. Rejects calls to reports outside the user's whitelist: the request
-       path maps to a report key (core/reports_catalog.PATH_REPORT_MAP)
-       that must intersect the whitelist. Admins and users with no
-       whitelist rows pass everything; unmapped paths (filters, health)
-       stay open to authenticated users.
-    """
+    """Apply report grants and install the Sathi-derived row scope."""
     from core.request_ctx import current_user
-    current_user.set(user)
 
-    if user["role"] == "admin":
-        return user
+    current_user.set(user)
     needed = report_for_path(request.url.path)
     if needed is None:
         return user
-    with users_conn() as conn:
-        allowed = {r[0] for r in conn.execute(
-            "SELECT report_key FROM user_reports WHERE user_id=?", (user["id"],)
-        )}
-    if not allowed or needed & allowed:   # no rows stored = all reports allowed
+    allowed = set(user.get("allowed_reports") or ["*"])
+    if "*" in allowed or needed & allowed:
         return user
     raise HTTPException(status_code=403, detail="This report is not enabled for your account")

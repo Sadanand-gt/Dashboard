@@ -87,8 +87,6 @@ def _branch_ids_for(level: str, values: tuple) -> set:
 
 def user_scope(user: dict) -> tuple[str, list[str]]:
     """Effective (level, values) for a user. ('', []) = unrestricted."""
-    if user.get("role") == "admin":
-        return "", []
     level = (user.get("scope_level") or "").strip().lower()
     values = _vals(user.get("scope_value"))
     if level in ("", "ho", "all") or not values:

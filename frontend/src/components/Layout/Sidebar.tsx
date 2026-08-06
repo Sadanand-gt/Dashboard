@@ -2,6 +2,7 @@ import { useNavigate, useLocation } from 'react-router-dom'
 import { useAuthStore } from '../../store/authStore'
 import { useFilterStore } from '../../store/filterStore'
 import { canSeePath } from '../../lib/reportAccess'
+import { api } from '../../api/client'
 import Box from '@mui/material/Box'
 import Tooltip from '@mui/material/Tooltip'
 import Divider from '@mui/material/Divider'
@@ -101,6 +102,13 @@ export function Sidebar() {
   const { user, clearAuth } = useAuthStore()
   const { sidebarOpen, setSidebarOpen } = useFilterStore()
 
+  const signOut = () => {
+    api.post('/auth/logout').catch(() => undefined).finally(() => {
+      clearAuth()
+      navigate('/login')
+    })
+  }
+
   const isActive = (path: string) =>
     path === '/dashboard'
       ? location.pathname === '/dashboard'
@@ -168,7 +176,7 @@ export function Sidebar() {
         <Box sx={{ p: 1, display: 'flex', justifyContent: 'center', borderTop: `1px solid ${BORDER}` }}>
           <Tooltip title={`${user?.full_name} — Sign out`} placement="right">
             <Box
-              onClick={() => { clearAuth(); navigate('/login') }}
+              onClick={signOut}
               sx={{
                 width: 32, height: 32, borderRadius: '50%', display: 'flex',
                 alignItems: 'center', justifyContent: 'center',
@@ -280,7 +288,7 @@ export function Sidebar() {
           </Box>
         </Box>
         <Box
-          onClick={() => { clearAuth(); navigate('/login') }}
+          onClick={signOut}
           className="flex items-center gap-2 cursor-pointer py-1 transition-colors"
           sx={{ fontSize: '0.72rem', color: MUTED, '&:hover': { color: TEXT } }}
         >

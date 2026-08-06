@@ -11,6 +11,7 @@ export interface User {
   scope_level?: ScopeLevel | null
   scope_value?: string | null          // comma-separated for multi
   allowed_reports?: string[]           // ['*'] = all reports
+  designation_type?: string | null      // hierarchy designation from Ananya Sathi
   cluster_id?: string | null
   region_id?: string | null
   area_id?: string | null
@@ -122,28 +123,12 @@ export interface HierarchyOptions {
 
 export interface UserCreate {
   username: string
-  password: string
-  full_name: string
   role: Role
-  scope_level?: ScopeLevel | ''
-  scope_value?: string
   reports?: string[]        // undefined/[] = all reports allowed
-  cluster_id?: string
-  region_id?: string
-  area_id?: string
-  branch_id?: string
 }
 
 export interface UserUpdate {
-  full_name?: string
   role?: Role
   is_active?: boolean
-  password?: string
-  scope_level?: ScopeLevel | ''   // '' or 'ho' clears the scope
-  scope_value?: string
   reports?: string[]              // undefined = unchanged; [] = all allowed
-  cluster_id?: string
-  region_id?: string
-  area_id?: string
-  branch_id?: string
 }
