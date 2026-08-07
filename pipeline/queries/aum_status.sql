@@ -375,6 +375,33 @@ jlg_pos_eom AS (
     GROUP BY loan_id
 ),
 
+-- Disbursed-so-far at the prev month-end, for STAGED (tranched) IL loans.
+-- prev_pos was based on total_loan_amount = the SANCTION, so undisbursed sanction
+-- was reported as outstanding. On 2026-07-31 four IL loans were part-disbursed and
+-- that overstated month-end POS by Rs 2,57,829 (Rs 0.0258 Cr) — exactly the gap
+-- between OD Status and the trend engine, which has always used disbursed-so-far.
+-- Live POS is unaffected: it reads la.principal_outstanding, the core system's own
+-- balance, which already nets off the undisbursed portion.
+-- Same source and as-of rule as trend_full_il.sql's disb_asof, so the two engines
+-- agree by construction. The inner subquery narrows the audit scan to staged loans
+-- only (principal_total <> total_loan_amount at some point); single-tranche loans
+-- never enter, so this is a no-op for the rest of the book.
+-- JLG has no staging (home_loan_account disburses in one shot) and measured a zero
+-- gap, so jlg prev_pos is deliberately left on total_loan_amount.
+il_disb_eom AS MATERIALIZED (
+    SELECT DISTINCT ON (a.loan_id)
+           a.loan_id, a.principal_total AS disbursed
+    FROM public.loan_account_il_audit a
+    WHERE a.principal_total IS NOT NULL
+      AND coalesce(a.modified_on, a.created_on) IS NOT NULL
+      AND coalesce(a.modified_on, a.created_on)::date < (SELECT curr_month_start FROM ref)
+      AND a.loan_id IN (
+          SELECT loan_id FROM public.loan_account_il_audit
+          WHERE principal_total IS NOT NULL AND total_loan_amount IS NOT NULL
+          GROUP BY loan_id HAVING bool_or(principal_total <> total_loan_amount))
+    ORDER BY a.loan_id, coalesce(a.modified_on, a.created_on) DESC
+),
+
 il_loans AS (
     SELECT
         'IL'                                                    AS loan_source,
@@ -390,7 +417,7 @@ il_loans AS (
         la.loan_officer                                         AS lo_id,
         la.product_id::text                                     AS product_id,
         la.principal_outstanding                                AS pos,
-        greatest(coalesce(la.total_loan_amount,0)
+        greatest(coalesce(de.disbursed, la.total_loan_amount, 0)
                  - coalesce(pe.prin_coll,0), 0)                 AS prev_pos,
         la.total_loan_amount                                    AS sanctioned_amount,
         la.disbursement_date,
@@ -428,6 +455,7 @@ il_loans AS (
     LEFT JOIN il_prod_class ipc ON ipc.product_id = la.product_id::text
     LEFT JOIN il_extra      ex  ON ex.loan_id     = la.loan_id
     LEFT JOIN il_pos_eom    pe  ON pe.loan_id     = la.loan_id
+    LEFT JOIN il_disb_eom   de  ON de.loan_id     = la.loan_id
     LEFT JOIN wo_master w ON w.loan_id = la.loan_id
     WHERE la.loan_id >= 10000000                 -- drop junk/test ids (e.g. 1111111)
       AND la.status <> 'R'
