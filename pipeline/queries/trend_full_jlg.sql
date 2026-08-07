@@ -225,6 +225,32 @@ state AS (
     LEFT JOIN dpd dp ON dp.loan_id = c.loan_id AND dp.m = c.m
 ),
 
+-- Collections from loans that were PAR>60 at the PREVIOUS month-end.
+--
+-- Split deliberately: the PAR>60 FLAG comes from the grid (s.dpd at month m,
+-- which is the previous month-end for month m+1), but the CASH comes from
+-- coll_m, which reads the repayment ledger and is not gridded. The old version
+-- took both from `flags`, so when a PAR>60 loan was settled or closed, the grid
+-- ended the month before closure and its final collections vanished — exactly
+-- the recovery this measure exists to show. It ran 8-42% under Excel.
+--
+-- Pairing s.m with c.m = s.m + 1 month means a loan whose grid ends at M-1
+-- still reports the cash it paid in M, its closure month.
+par60_m AS (
+    SELECT c.m,
+        s.branch_id, s.lo_id, s.business_segment,
+        s.disb_year, s.cycle_no, s.prod_classification,
+        sum(c.coll) AS par60_collection
+    FROM state s
+    JOIN coll_m c
+      ON c.loan_id = s.loan_id
+     AND c.m = (s.m + interval '1 month')::date
+    WHERE s.dpd > 60
+      AND NOT (s.wo_month IS NOT NULL AND c.m >= s.wo_month)
+      AND c.m <= (SELECT m FROM last_m)
+    GROUP BY 1, 2, 3, 4, 5, 6, 7
+),
+
 flags AS (
     SELECT *,
         lag(dpd) OVER (PARTITION BY loan_id ORDER BY m) AS prev_dpd,
@@ -337,18 +363,19 @@ agg AS (
 
 , joined AS (
     SELECT
-        coalesce(a.m, d.m, r.m)                                   AS m,
-        coalesce(a.business_segment, d.business_segment, r.business_segment)     AS business_segment,
-        coalesce(a.branch_id, d.branch_id, r.branch_id)                   AS branch_id,
-        coalesce(a.lo_id, d.lo_id, r.lo_id)                           AS lo_id,
-        coalesce(a.disb_year, d.disb_year, r.disb_year)                   AS disb_year,
-        coalesce(a.cycle_no, d.cycle_no, r.cycle_no)                     AS cycle_no,
-        coalesce(a.prod_classification, d.prod_classification, r.prod_classification) AS prod_classification,
+        coalesce(a.m, d.m, r.m, p.m)                                   AS m,
+        coalesce(a.business_segment, d.business_segment, r.business_segment, p.business_segment)     AS business_segment,
+        coalesce(a.branch_id, d.branch_id, r.branch_id, p.branch_id)                   AS branch_id,
+        coalesce(a.lo_id, d.lo_id, r.lo_id, p.lo_id)                           AS lo_id,
+        coalesce(a.disb_year, d.disb_year, r.disb_year, p.disb_year)                   AS disb_year,
+        coalesce(a.cycle_no, d.cycle_no, r.cycle_no, p.cycle_no)                     AS cycle_no,
+        coalesce(a.prod_classification, d.prod_classification, r.prod_classification, p.prod_classification) AS prod_classification,
         a.loans_eom, a.pos_eom, a.par0_pos, a.par30_pos, a.par60_pos, a.par90_pos,
         a.wo_loans_eom, a.wo_pos_eom,
         a.demand, a.collection, a.collection_capped,
         a.slip_count, a.slip_pos, a.prev_regular_pos,
-        a.reg_demand, a.reg_collection, a.par60_collection,
+        a.reg_demand, a.reg_collection,
+        p.par60_collection,
         r.wo_recovery,
         a.demand_wo, a.collection_capped_wo, a.slip_count_wo, a.slip_pos_wo,
         a.prev_regular_pos_wo, a.reg_demand_wo, a.reg_collection_wo,
@@ -368,6 +395,14 @@ agg AS (
        AND r.disb_year IS NOT DISTINCT FROM coalesce(a.disb_year, d.disb_year)
        AND r.cycle_no  IS NOT DISTINCT FROM coalesce(a.cycle_no, d.cycle_no)
        AND r.prod_classification IS NOT DISTINCT FROM coalesce(a.prod_classification, d.prod_classification)
+    FULL OUTER JOIN par60_m p
+        ON p.m = coalesce(a.m, d.m, r.m)
+       AND p.branch_id = coalesce(a.branch_id, d.branch_id, r.branch_id)
+       AND p.lo_id IS NOT DISTINCT FROM coalesce(a.lo_id, d.lo_id, r.lo_id)
+       AND p.business_segment = coalesce(a.business_segment, d.business_segment, r.business_segment)
+       AND p.disb_year IS NOT DISTINCT FROM coalesce(a.disb_year, d.disb_year, r.disb_year)
+       AND p.cycle_no  IS NOT DISTINCT FROM coalesce(a.cycle_no, d.cycle_no, r.cycle_no)
+       AND p.prod_classification IS NOT DISTINCT FROM coalesce(a.prod_classification, d.prod_classification, r.prod_classification)
 )
 
 SELECT
