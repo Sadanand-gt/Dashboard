@@ -29,7 +29,7 @@ from pipeline.load_writeoff_master import get_writeoff_ids, writeoff_values_lite
 
 # Reports whose SQL needs the write-off master ids injected (placeholder {wo_ids}).
 WRITEOFF_AWARE = {"aum_status", "collection_fact", "od_list", "od_slippage", "dq_category", "writeoff",
-                  "aum_live", "delinquencies", "pos_par", "cashless_collection"}  # {wo_ids}/{wo_pairs} override; writeoff uses {wo_triples} (master-based)
+                  "aum_live", "delinquencies", "pos_par", "cashless_collection", "portfolio_cuts"}  # {wo_ids}/{wo_pairs} override; writeoff uses {wo_triples} (master-based)
 
 # ── Logging ───────────────────────────────────────────────────────────────────
 LOG_DIR = os.path.join(os.path.dirname(os.path.dirname(__file__)), "logs")
@@ -107,6 +107,7 @@ REPORTS = [
     # PEP / work-abroad / LUC flags) with full hierarchy + segment dims
     ("aml",               "aml_risk.sql",          "rpt_aml"),
     ("ots",               "ots.sql",               "rpt_ots"),
+    ("portfolio_cuts",    "portfolio_cuts.sql",    "rpt_portfolio_cuts"),
 ]
 
 # Split reports — IL and JLG run as separate DB calls, combined in Python.

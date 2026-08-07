@@ -65,7 +65,14 @@ loans AS (
         CASE WHEN la.status = 'W'
                   OR (w.loan_id IS NOT NULL
                       AND (w.wo_date IS NULL OR la.disbursement_date::date <= w.wo_date))
-             THEN date_trunc('month', coalesce(la.writeoff_date, w.wo_date))::date END AS wo_month
+             THEN date_trunc('month', coalesce(la.writeoff_date, w.wo_date))::date END AS wo_month,
+        -- Same test, DAY precision. wo_recovery is measured against the write-off
+        -- DATE, not its month: a collection taken later in the write-off month is
+        -- still a recovery. Verified against Excel 2026-08-07 (Sep-25 within Rs 9).
+        CASE WHEN la.status = 'W'
+                  OR (w.loan_id IS NOT NULL
+                      AND (w.wo_date IS NULL OR la.disbursement_date::date <= w.wo_date))
+             THEN coalesce(la.writeoff_date, w.wo_date)::date END AS wo_dt
     FROM public.loan_account_il la
     -- history needs CLOSED loans too: status X = completed/closed (324k JLG /
     -- most IL history live there). Only 'R' (rejected) is excluded.
@@ -236,6 +243,33 @@ flags AS (
     FROM state
 ),
 
+-- Post-write-off recovery, taken STRAIGHT FROM THE COLLECTION LEDGER.
+--
+-- It deliberately does NOT go through `grid`/`flags`. The grid ends a loan's
+-- month series at the month BEFORE closure, and a write-off normally CLOSES the
+-- loan — so every recovery month fell outside the grid and was silently dropped.
+-- Measured 2026-08-07: rpt_trend_full ran 35-45% under Excel every month, while
+-- this ledger-based figure lands on it (Sep-25 within Rs 9, Mar-26 within
+-- Rs 5,389). Only loans are joined here, never the grid, so a closed loan still
+-- reports the cash it brings in.
+--
+-- Stock measures keep the grid truncation, which is correct for them: a loan
+-- closed mid-month is not on-book at month-end.
+wo_rec_m AS (
+    SELECT date_trunc('month', rd.collection_date_time)::date AS m,
+        l.branch_id, l.lo_id, l.business_segment,
+        l.disb_year, l.cycle_no, l.prod_classification,
+        sum(coalesce(rd.principal_collected, 0)
+          + coalesce(rd.interest_collected, 0))            AS wo_recovery
+    FROM public.repayment_detail_il rd
+    JOIN loans l ON l.loan_id = rd.loan_id
+    WHERE rd.status = 'A'
+      AND l.wo_dt IS NOT NULL
+      AND rd.collection_date_time::date > l.wo_dt
+      AND date_trunc('month', rd.collection_date_time)::date <= (SELECT m FROM last_m)
+    GROUP BY 1, 2, 3, 4, 5, 6, 7
+),
+
 -- monthly disbursement (independent of the repayment ledger)
 disb_m AS (
     SELECT date_trunc('month', disb_date)::date AS m,
@@ -311,18 +345,19 @@ agg AS (
 
 , joined AS (
     SELECT
-        coalesce(a.m, d.m)                                   AS m,
-        coalesce(a.business_segment, d.business_segment)     AS business_segment,
-        coalesce(a.branch_id, d.branch_id)                   AS branch_id,
-        coalesce(a.lo_id, d.lo_id)                           AS lo_id,
-        coalesce(a.disb_year, d.disb_year)                   AS disb_year,
-        coalesce(a.cycle_no, d.cycle_no)                     AS cycle_no,
-        coalesce(a.prod_classification, d.prod_classification) AS prod_classification,
+        coalesce(a.m, d.m, r.m)                                   AS m,
+        coalesce(a.business_segment, d.business_segment, r.business_segment)     AS business_segment,
+        coalesce(a.branch_id, d.branch_id, r.branch_id)                   AS branch_id,
+        coalesce(a.lo_id, d.lo_id, r.lo_id)                           AS lo_id,
+        coalesce(a.disb_year, d.disb_year, r.disb_year)                   AS disb_year,
+        coalesce(a.cycle_no, d.cycle_no, r.cycle_no)                     AS cycle_no,
+        coalesce(a.prod_classification, d.prod_classification, r.prod_classification) AS prod_classification,
         a.loans_eom, a.pos_eom, a.par0_pos, a.par30_pos, a.par60_pos, a.par90_pos,
         a.wo_loans_eom, a.wo_pos_eom,
         a.demand, a.collection, a.collection_capped,
         a.slip_count, a.slip_pos, a.prev_regular_pos,
-        a.reg_demand, a.reg_collection, a.par60_collection, a.wo_recovery,
+        a.reg_demand, a.reg_collection, a.par60_collection,
+        r.wo_recovery,
         a.demand_wo, a.collection_capped_wo, a.slip_count_wo, a.slip_pos_wo,
         a.prev_regular_pos_wo, a.reg_demand_wo, a.reg_collection_wo,
         d.disb_count, d.disb_amount
@@ -334,6 +369,13 @@ agg AS (
        AND d.disb_year IS NOT DISTINCT FROM a.disb_year
        AND d.cycle_no  IS NOT DISTINCT FROM a.cycle_no
        AND d.prod_classification IS NOT DISTINCT FROM a.prod_classification
+    FULL OUTER JOIN wo_rec_m r
+        ON r.m = coalesce(a.m, d.m) AND r.branch_id = coalesce(a.branch_id, d.branch_id)
+       AND r.lo_id IS NOT DISTINCT FROM coalesce(a.lo_id, d.lo_id)
+       AND r.business_segment = coalesce(a.business_segment, d.business_segment)
+       AND r.disb_year IS NOT DISTINCT FROM coalesce(a.disb_year, d.disb_year)
+       AND r.cycle_no  IS NOT DISTINCT FROM coalesce(a.cycle_no, d.cycle_no)
+       AND r.prod_classification IS NOT DISTINCT FROM coalesce(a.prod_classification, d.prod_classification)
 )
 
 SELECT
