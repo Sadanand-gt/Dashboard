@@ -27,7 +27,6 @@ from api.trend import router as trend_router
 from api.report_summary import router as report_summary_router
 from api.writeoff import router as writeoff_router
 from api.filters import router as filters_router
-from api.operations import router as operations_router
 
 
 @asynccontextmanager
@@ -78,7 +77,11 @@ app.include_router(trend_router, prefix="/api", tags=["Trend"], dependencies=_ga
 app.include_router(report_summary_router, prefix="/api", tags=["Report Summary"], dependencies=_gated)
 app.include_router(writeoff_router, prefix="/api", tags=["Write-Off"], dependencies=_gated)
 app.include_router(filters_router, prefix="/api", tags=["Filters"], dependencies=_gated)
-app.include_router(operations_router, prefix="/api", tags=["Operations"], dependencies=_gated)
+# operations router RETIRED 2026-08-07 — six raw table-dump endpoints
+# (/bucket-movement, /delinquencies, /case-movement, /aum-live, /cashless,
+# /trend-monthly) with zero frontend callers. Every page uses the /summary
+# endpoints in report_summary.py instead. Kept the module on disk for one
+# release in case anything external was calling it.
 
 
 @app.get("/health")

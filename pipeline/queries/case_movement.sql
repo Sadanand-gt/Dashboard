@@ -20,6 +20,10 @@
 -- Note    : IL meeting table (meeting_sch) not confirmed in prod DB.
 --           CGT/GRT metrics pulled from home_meeting_sch for JLG only.
 --           approval_ratio = approved / cb_checked (CB=credit bureau check)
+--           approved = the application carries a sanction_date. NOTE the cohort
+--           is immature: applications filed this month that are still in process
+--           count in the denominator but not yet in the numerator, so the ratio
+--           reads low early in a month and rises as decisions land.
 --           Approval: status='XR' AND rejection_reason IN ('LC','Rejected','BRJ')
 --           (per PBI DAX -- these reason codes indicate credit-approved loans,
 --            not truly rejected ones, in Ananya's CBS naming convention)
@@ -223,11 +227,18 @@ il_branch AS (
               AND a.app_date < current_date
               AND a.is_topup = 0 AND a.is_duplicate = 0 AND a.cust_type = 'NC'
               THEN a.application_number END)                               AS cb_checked_nc_mtd,
-        -- Approved (per PBI: status=XR and reason LC/Rejected/BRJ = credit approved in CBS)
+        -- Approved = credit sanctioned. The previous rule counted
+        -- status='XR' AND rejection_reason IN ('LC','Rejected','BRJ') — but 'XR'
+        -- is this file's own REJECTED marker (see rejected_t1 / rejected_mtd),
+        -- so approvals were being counted out of the rejected pile, and
+        -- 'Rejected' is not even a value rejection_reason takes. It read 4
+        -- against 461 sanctioned and 453 disbursed. On loan_application_il,
+        -- status 'DS' is the successful state and all 7,750 of those rows carry
+        -- a sanction_date, so sanction_date IS NOT NULL is the reliable test
+        -- and it matches how sanctioned_mtd is already measured.
         count(DISTINCT CASE WHEN a.app_date >= r.mtd_start
               AND a.app_date < current_date
-              AND a.status = 'XR'
-              AND a.rejection_reason IN ('LC', 'Rejected', 'BRJ')
+              AND a.sanction_date IS NOT NULL
               AND a.is_topup = 0 AND a.is_duplicate = 0 AND a.cust_type = 'NC'
               THEN a.application_number END)                               AS approved_nc_mtd,
         -- Existing clients (EC)
@@ -237,8 +248,7 @@ il_branch AS (
               THEN a.application_number END)                               AS cb_checked_ec_mtd,
         count(DISTINCT CASE WHEN a.app_date >= r.mtd_start
               AND a.app_date < current_date
-              AND a.status = 'XR'
-              AND a.rejection_reason IN ('LC', 'Rejected', 'BRJ')
+              AND a.sanction_date IS NOT NULL
               AND a.is_topup = 0 AND a.is_duplicate = 0 AND a.cust_type = 'EC'
               THEN a.application_number END)                               AS approved_ec_mtd,
         -- Duplicate %
@@ -307,8 +317,7 @@ jlg_branch AS (
               THEN a.application_number END)                               AS cb_checked_nc_mtd,
         count(DISTINCT CASE WHEN a.app_date >= r.mtd_start
               AND a.app_date < current_date
-              AND a.status = 'XR'
-              AND a.rejection_reason IN ('LC', 'Rejected', 'BRJ')
+              AND a.sanction_date IS NOT NULL
               AND a.is_topup = 0 AND a.is_duplicate = 0 AND a.cust_type = 'NC'
               THEN a.application_number END)                               AS approved_nc_mtd,
         count(DISTINCT CASE WHEN a.app_date >= r.mtd_start
@@ -317,8 +326,7 @@ jlg_branch AS (
               THEN a.application_number END)                               AS cb_checked_ec_mtd,
         count(DISTINCT CASE WHEN a.app_date >= r.mtd_start
               AND a.app_date < current_date
-              AND a.status = 'XR'
-              AND a.rejection_reason IN ('LC', 'Rejected', 'BRJ')
+              AND a.sanction_date IS NOT NULL
               AND a.is_topup = 0 AND a.is_duplicate = 0 AND a.cust_type = 'EC'
               THEN a.application_number END)                               AS approved_ec_mtd,
         count(CASE WHEN a.app_date >= r.mtd_start

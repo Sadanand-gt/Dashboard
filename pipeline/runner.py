@@ -546,7 +546,11 @@ def run_dpd_snapshot() -> bool:
 
 # Split reports dispatched by key (not part of the simple REPORTS loop).
 SPLIT_REPORTS = {
-    "bucket_movement": run_bucket_movement,
+    # bucket_movement RETIRED 2026-08-07: rpt_bucket_movement had no consumer.
+    # The Bucket Movement PAGE reads rpt_aum_status (backend/api/bucket_movement.py);
+    # this table was only exposed via the now-retired operations router, and it
+    # carries no loan_status column so it could never serve an Excl-W/O view.
+    # DROP script: dba_drop_unused_tables.sql
     "trend_monthly":   run_trend_monthly,
     "trend_full":      run_trend_full,
     "mtd_flow":        run_mtd_flow,

@@ -570,18 +570,25 @@ bucketed AS (
             WHEN al.dpd BETWEEN 181 AND 360         THEN '181 - 360'
             ELSE                                         '360 +'
         END AS curr_dpd_bucket,
+        -- Movement is measured MONTH-END -> LIVE, the same period as
+        -- prev_dpd_bucket -> curr_dpd_bucket above and as rpt_od_slippage.
+        -- These two columns previously compared eom_dpd vs pre_dpd, i.e. the
+        -- PREVIOUS month's movement (Jun-end -> Jul-end) while the matrix showed
+        -- Jul-end -> today. The OD Status KPI reads od_movement_status and its
+        -- own matrix reads the buckets, so the same page disagreed with itself:
+        -- 317 vs 3,082 slippage on 2026-08-07. Same rule, shifted one period.
         CASE
-            WHEN al.raw_status = 'W'                     THEN 'Write-Off'
-            WHEN al.eom_dpd = 0 AND al.pre_dpd = 0      THEN 'Not OD'
-            WHEN al.eom_dpd > 0 AND al.pre_dpd = 0      THEN 'OD Slippage'
-            WHEN al.eom_dpd = 0 AND al.pre_dpd > 0      THEN 'Regularised'
-            ELSE                                              'Continuing'
+            WHEN al.raw_status = 'W'                          THEN 'Write-Off'
+            WHEN al.eom_dpd = 0 AND coalesce(al.dpd,0) = 0    THEN 'Not OD'
+            WHEN al.eom_dpd = 0 AND coalesce(al.dpd,0) > 0    THEN 'OD Slippage'
+            WHEN al.eom_dpd > 0 AND coalesce(al.dpd,0) = 0    THEN 'Regularised'
+            ELSE                                                   'Continuing'
         END AS od_movement_status,
         CASE
-            WHEN al.raw_status = 'W'                     THEN 'N/A'
-            WHEN al.eom_dpd = al.pre_dpd                THEN 'Static'
-            WHEN al.eom_dpd < al.pre_dpd                THEN 'Improved'
-            ELSE                                              'Worsened'
+            WHEN al.raw_status = 'W'                          THEN 'N/A'
+            WHEN coalesce(al.dpd,0) = al.eom_dpd              THEN 'Static'
+            WHEN coalesce(al.dpd,0) < al.eom_dpd              THEN 'Improved'
+            ELSE                                                   'Worsened'
         END AS bucket_movement,
         CASE WHEN al.dpd >= 1                       THEN al.pos ELSE 0 END AS par0_pos,
         CASE WHEN al.dpd > 30                       THEN al.pos ELSE 0 END AS par30_pos,
