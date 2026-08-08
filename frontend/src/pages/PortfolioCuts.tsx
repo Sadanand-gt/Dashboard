@@ -9,6 +9,7 @@ import TableRow from '@mui/material/TableRow'
 import TableCell from '@mui/material/TableCell'
 import Skeleton from '@mui/material/Skeleton'
 import Chip from '@mui/material/Chip'
+import Button from '@mui/material/Button'
 import ToggleButton from '@mui/material/ToggleButton'
 import ToggleButtonGroup from '@mui/material/ToggleButtonGroup'
 import Tooltip from '@mui/material/Tooltip'
@@ -73,6 +74,7 @@ export function PortfolioCuts() {
   const [cut, setCut] = useState('Business Segment')
   const [portfolio, setPortfolio] = useState<'without' | 'with'>('without')
   const [measure, setMeasure] = useState<'pos' | 'n'>('pos')
+  const [showCharts, setShowCharts] = useState(true)
 
   const params = { ...slicer, group_by: 'cut_value', pick: cut, portfolio }
   const { data, isLoading } = useQuery({
@@ -140,6 +142,10 @@ export function PortfolioCuts() {
               <ToggleButton value="pos" sx={{ fontSize: '0.68rem', px: 1.25, py: 0.35 }}>₹ POS</ToggleButton>
               <ToggleButton value="n" sx={{ fontSize: '0.68rem', px: 1.25, py: 0.35 }}># Loans</ToggleButton>
             </ToggleButtonGroup>
+            <Button size="small" variant="text" onClick={() => setShowCharts((v) => !v)}
+              sx={{ fontSize: '0.68rem', textTransform: 'none', color: MUTED, minWidth: 0, px: 1 }}>
+              {showCharts ? 'Hide charts' : 'Show charts'}
+            </Button>
             <ExportCsvButton rows={exportRows} columns={EXPORT_COLS}
               filename={`portfolio_cuts_${cut.replace(/\s+/g, '_').toLowerCase()}`} />
           </Box>
@@ -170,7 +176,8 @@ export function PortfolioCuts() {
                  sub={`₹${fmtCr(grand.wo3m_amount ?? 0)} Cr`} variant="red" loading={isLoading} />
       </Box>
 
-      {/* ── charts ───────────────────────────────────────────────────────── */}
+      {/* ── charts (collapsible — the matrix is the deliverable) ─────────── */}
+      {showCharts && (
       <Box sx={{ display: 'grid', gap: 2, mb: 2,
                  gridTemplateColumns: { xs: '1fr', lg: '1.15fr 1fr' } }}>
         <Paper variant="outlined" sx={{ p: 1.5, borderColor: LINE }}>
@@ -241,6 +248,8 @@ export function PortfolioCuts() {
         </Paper>
       </Box>
 
+      )}
+
       {/* ── the Excel matrix ─────────────────────────────────────────────── */}
       <Paper variant="outlined" sx={{ borderColor: LINE }}>
         <Box sx={{ p: 1.5, pb: 1 }}>
@@ -253,7 +262,9 @@ export function PortfolioCuts() {
           <Table size="small" stickyHeader sx={{ minWidth: 1180 }}>
             <TableHead>
               <TableRow>
-                <TableCell sx={{ fontWeight: 700, fontSize: '0.7rem' }}>{cut}</TableCell>
+                <TableCell sx={{ fontWeight: 700, fontSize: '0.7rem', position: 'sticky',
+                                 left: 0, zIndex: 3, background: '#fff',
+                                 borderRight: `1px solid ${LINE}` }}>{cut}</TableCell>
                 {BUCKETS.map((b) => (
                   <TableCell key={`n${b.key}`} align="right" sx={{ fontWeight: 700, fontSize: '0.7rem' }}>{b.label}</TableCell>
                 ))}
@@ -282,8 +293,10 @@ export function PortfolioCuts() {
                 </TableCell></TableRow>
               )}
               {!isLoading && rows.map((r) => (
-                <TableRow key={r.name} hover>
-                  <TableCell sx={{ fontSize: '0.75rem', fontWeight: 600 }}>{r.name}</TableCell>
+                <TableRow key={r.name} hover sx={{ '&:nth-of-type(even)': { background: '#FCFDFF' } }}>
+                  <TableCell sx={{ fontSize: '0.75rem', fontWeight: 600, position: 'sticky',
+                                   left: 0, zIndex: 2, background: 'inherit',
+                                   borderRight: `1px solid ${LINE}` }}>{r.name}</TableCell>
                   {BUCKETS.map((b) => (
                     <TableCell key={b.key} align="right" sx={{ fontSize: '0.75rem' }}>
                       {fmtN(r[`n_${b.key}`] ?? 0)}
@@ -307,7 +320,9 @@ export function PortfolioCuts() {
               ))}
               {!isLoading && rows.length > 0 && (
                 <TableRow sx={{ bgcolor: '#F8FAFC' }}>
-                  <TableCell sx={{ fontSize: '0.75rem', fontWeight: 800 }}>Grand Total</TableCell>
+                  <TableCell sx={{ fontSize: '0.75rem', fontWeight: 800, position: 'sticky',
+                                   left: 0, zIndex: 2, background: '#F8FAFC',
+                                   borderRight: `1px solid ${LINE}` }}>Grand Total</TableCell>
                   {BUCKETS.map((b) => (
                     <TableCell key={b.key} align="right" sx={{ fontSize: '0.75rem', fontWeight: 800 }}>
                       {fmtN(grand[`n_${b.key}`] ?? 0)}

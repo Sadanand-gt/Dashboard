@@ -16,7 +16,10 @@ export interface FilterState {
 
 export const useFilterStore = create<FilterState>((set, get) => ({
   selections: {},
-  panelOpen: true,
+  // Collapsed by default: the slicers are an occasional action, not a
+  // permanent fixture, and the reports need the width more than the
+  // panel does. The user opens it from the right-edge strip.
+  panelOpen: false,
   sidebarOpen: true,
 
   setSelection: (id, values) =>
