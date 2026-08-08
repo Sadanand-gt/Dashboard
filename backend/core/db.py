@@ -181,6 +181,12 @@ def init_users_db() -> None:
             conn.execute("ALTER TABLE users ADD COLUMN scope_level TEXT")
         if "scope_value" not in existing:
             conn.execute("ALTER TABLE users ADD COLUMN scope_value TEXT")
+        # CSV export is a PRIVILEGE, not a default. Data leaves the dashboard the
+        # moment a file is downloaded, so every user starts at 0 and an admin
+        # grants it deliberately. Existing users are migrated to 0 for the same
+        # reason — a schema change must not hand out a capability nobody asked for.
+        if "can_export" not in existing:
+            conn.execute("ALTER TABLE users ADD COLUMN can_export INTEGER NOT NULL DEFAULT 0")
         # Role rename: 'analyst' → 'officer' (2026-07)
         conn.execute("UPDATE users SET role='officer' WHERE role='analyst'")
         # Report visibility whitelist: no rows for a user = all reports allowed.

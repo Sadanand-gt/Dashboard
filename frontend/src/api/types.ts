@@ -11,6 +11,7 @@ export interface User {
   scope_level?: ScopeLevel | null
   scope_value?: string | null          // comma-separated for multi
   allowed_reports?: string[]           // ['*'] = all reports
+  can_export?: boolean                 // CSV export privilege — off unless granted
   cluster_id?: string | null
   region_id?: string | null
   area_id?: string | null
@@ -128,6 +129,7 @@ export interface UserCreate {
   scope_level?: ScopeLevel | ''
   scope_value?: string
   reports?: string[]        // undefined/[] = all reports allowed
+  can_export?: boolean      // CSV export — off unless granted
   cluster_id?: string
   region_id?: string
   area_id?: string
@@ -142,6 +144,7 @@ export interface UserUpdate {
   scope_level?: ScopeLevel | ''   // '' or 'ho' clears the scope
   scope_value?: string
   reports?: string[]              // undefined = unchanged; [] = all allowed
+  can_export?: boolean            // undefined = unchanged
   cluster_id?: string
   region_id?: string
   area_id?: string

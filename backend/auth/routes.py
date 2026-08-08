@@ -62,6 +62,7 @@ def _row_to_user(row: dict) -> UserOut:
         scope_level=row.get("scope_level"),
         scope_value=row.get("scope_value"),
         allowed_reports=_allowed_reports(row["id"], row["role"]),
+        can_export=bool(row.get("can_export") or 0),
         cluster_id=row.get("cluster_id"),
         region_id=row.get("region_id"),
         area_id=row.get("area_id"),
@@ -136,11 +137,11 @@ def create_user(body: UserCreate, _: dict = Depends(require_admin)):
             conn.execute(
                 """INSERT INTO users
                    (username, password_hash, full_name, role,
-                    scope_level, scope_value,
+                    scope_level, scope_value, can_export,
                     cluster_id, region_id, area_id, branch_id)
-                   VALUES (?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?)""",
                 (body.username, hashed, body.full_name, body.role,
-                 scope_level, scope_value,
+                 scope_level, scope_value, int(bool(body.can_export)),
                  body.cluster_id, body.region_id, body.area_id, body.branch_id),
             )
             conn.commit()
@@ -177,6 +178,8 @@ def update_user(user_id: int, body: UserUpdate, _: dict = Depends(require_admin)
         updates["scope_value"] = val
     elif body.scope_value is not None:
         updates["scope_value"] = body.scope_value.strip() or None
+    if body.can_export is not None:
+        updates["can_export"] = int(bool(body.can_export))
     if body.cluster_id is not None:
         updates["cluster_id"] = body.cluster_id
     if body.region_id is not None:

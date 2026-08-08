@@ -19,6 +19,7 @@ import {
 import { api } from '../api/client'
 import { KpiCard } from '../components/KpiCard'
 import { useSlicerParams } from '../store/filterStore'
+import { ExportCsvButton } from '../components/ExportCsvButton'
 
 // ── Palette — DPD buckets run green (current) to red (deepest arrears) ────────
 const BUCKET_COLORS: Record<string, string> = {
@@ -49,6 +50,21 @@ const cr = (n: number) => (n / 1e7)
 const fmtCr = (n: number) => cr(n).toLocaleString('en-IN', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
 const fmtN = (n: number) => Math.round(n).toLocaleString('en-IN')
 const fmtPct = (n: number) => `${(n ?? 0).toFixed(2)}%`
+
+// Export mirrors the on-screen matrix, in the same column order, so a
+// downloaded file and the page can be read side by side.
+const EXPORT_COLS: [string, string][] = [
+  ['name', 'Cut'],
+  ['n_regular', '# Regular'], ['n_1_30', '# 1-30'], ['n_31_60', '# 31-60'],
+  ['n_61_90', '# 61-90'], ['n_91_180', '# 91-180'], ['n_181_360', '# 181-360'],
+  ['n_360_plus', '# 360+'], ['n_total', '# Total'],
+  ['pos_regular', 'POS Regular'], ['pos_1_30', 'POS 1-30'], ['pos_31_60', 'POS 31-60'],
+  ['pos_61_90', 'POS 61-90'], ['pos_91_180', 'POS 91-180'], ['pos_181_360', 'POS 181-360'],
+  ['pos_360_plus', 'POS 360+'], ['pos_total', 'POS Total'],
+  ['par0_pct', 'PAR>0 %'], ['par30_pct', 'PAR>30 %'],
+  ['par90_pct', 'PAR>90 %'], ['par60_pct', 'PAR>60 %'],
+  ['wo3m_count', 'Write-off 3M #'], ['wo3m_amount', 'Write-off 3M Rs'],
+]
 
 type Row = Record<string, any>
 
@@ -83,6 +99,11 @@ export function PortfolioCuts() {
 
   const avgPar30 = Number(grand.par30_pct) || 0
 
+  // Rows plus the Grand Total, so the file reconciles on its own.
+  const exportRows = useMemo(
+    () => (rows.length ? [...rows, { ...grand, name: 'Grand Total' }] : []),
+    [rows, grand])
+
   const stacked = useMemo(() => rows.map((r) => {
     const o: Row = { name: r.name }
     BUCKETS.forEach((b) => {
@@ -93,17 +114,53 @@ export function PortfolioCuts() {
 
   return (
     <Box sx={{ p: 2.5 }}>
-      {/* ── header ───────────────────────────────────────────────────────── */}
-      <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1.5, flexWrap: 'wrap', mb: 0.5 }}>
-        <Box sx={{ fontSize: '1.35rem', fontWeight: 700, color: INK }}>Portfolio Cuts</Box>
-        <Box sx={{ fontSize: '0.78rem', color: MUTED }}>
-          live book sliced 11 ways · as of {data?.as_of ?? '—'}
+      {/* ── STICKY COMMAND BAR — title, cuts, view toggles, export ──────
+           Frozen to the top so the cut you are looking at stays named and
+           switchable while you scroll a long matrix. It sits ABOVE the KPI
+           cards because the cut governs every number below it. ──────────── */}
+      <Box sx={{ position: 'sticky', top: 0, zIndex: 30, bgcolor: '#fff',
+                 pt: 2, pb: 1, mx: -2.5, px: 2.5,
+                 borderBottom: `1px solid ${LINE}`,
+                 boxShadow: '0 2px 6px -4px rgba(15,23,42,0.25)' }}>
+        <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1.5,
+                   flexWrap: 'wrap', mb: 1 }}>
+          <Box sx={{ fontSize: '1.2rem', fontWeight: 700, color: INK }}>Portfolio Cuts</Box>
+          <Box sx={{ fontSize: '0.75rem', color: MUTED }}>
+            live book · as of {data?.as_of ?? '—'}
+          </Box>
+          <Box sx={{ flex: 1 }} />
+          <Box sx={{ display: 'flex', gap: 1.25, alignItems: 'center', flexWrap: 'wrap' }}>
+            <ToggleButtonGroup size="small" exclusive value={portfolio}
+              onChange={(_, v) => v && setPortfolio(v)}>
+              <ToggleButton value="without" sx={{ fontSize: '0.68rem', px: 1.25, py: 0.35 }}>Excl. W/O</ToggleButton>
+              <ToggleButton value="with" sx={{ fontSize: '0.68rem', px: 1.25, py: 0.35 }}>With W/O</ToggleButton>
+            </ToggleButtonGroup>
+            <ToggleButtonGroup size="small" exclusive value={measure}
+              onChange={(_, v) => v && setMeasure(v)}>
+              <ToggleButton value="pos" sx={{ fontSize: '0.68rem', px: 1.25, py: 0.35 }}>₹ POS</ToggleButton>
+              <ToggleButton value="n" sx={{ fontSize: '0.68rem', px: 1.25, py: 0.35 }}># Loans</ToggleButton>
+            </ToggleButtonGroup>
+            <ExportCsvButton rows={exportRows} columns={EXPORT_COLS}
+              filename={`portfolio_cuts_${cut.replace(/\s+/g, '_').toLowerCase()}`} />
+          </Box>
+        </Box>
+        <Box sx={{ display: 'flex', gap: 0.6, flexWrap: 'wrap' }}>
+          {CUTS.map((c) => (
+            <Chip key={c} label={c} size="small" clickable onClick={() => setCut(c)}
+                  variant={cut === c ? 'filled' : 'outlined'}
+                  sx={{ fontSize: '0.7rem', height: 24,
+                        fontWeight: cut === c ? 700 : 500,
+                        bgcolor: cut === c ? INK : 'transparent',
+                        color: cut === c ? '#fff' : MUTED,
+                        borderColor: LINE,
+                        '&:hover': { bgcolor: cut === c ? INK : '#F1F5F9' } }} />
+          ))}
         </Box>
       </Box>
 
       {/* ── KPI strip ────────────────────────────────────────────────────── */}
-      <Box sx={{ display: 'grid', gap: 1.5, mb: 2,
-                 gridTemplateColumns: { xs: '1fr 1fr', md: 'repeat(6, 1fr)' } }}>
+      <Box sx={{ display: 'grid', gap: 1.5, mt: 2, mb: 2,
+                 gridTemplateColumns: { xs: '1fr 1fr', sm: 'repeat(3, 1fr)', md: 'repeat(6, 1fr)' } }}>
         <KpiCard label="Loans" value={isLoading ? '—' : fmtN(grand.n_total ?? 0)} sub="live book" loading={isLoading} />
         <KpiCard label="POS" value={isLoading ? '—' : `₹${fmtCr(grand.pos_total ?? 0)} Cr`} sub="outstanding" loading={isLoading} />
         <KpiCard label="PAR > 0" value={isLoading ? '—' : fmtPct(grand.par0_pct)} sub="of POS" variant="amber" loading={isLoading} />
@@ -112,32 +169,6 @@ export function PortfolioCuts() {
         <KpiCard label="Written off (3M)" value={isLoading ? '—' : fmtN(grand.wo3m_count ?? 0)}
                  sub={`₹${fmtCr(grand.wo3m_amount ?? 0)} Cr`} variant="red" loading={isLoading} />
       </Box>
-
-      {/* ── cut selector + view toggles ──────────────────────────────────── */}
-      <Paper variant="outlined" sx={{ p: 1.5, mb: 2, borderColor: LINE }}>
-        <Box sx={{ display: 'flex', gap: 0.75, flexWrap: 'wrap', mb: 1.25 }}>
-          {CUTS.map((c) => (
-            <Chip key={c} label={c} size="small" clickable onClick={() => setCut(c)}
-                  variant={cut === c ? 'filled' : 'outlined'}
-                  sx={{ fontSize: '0.72rem', fontWeight: cut === c ? 700 : 500,
-                        bgcolor: cut === c ? INK : 'transparent',
-                        color: cut === c ? '#fff' : MUTED,
-                        borderColor: LINE, '&:hover': { bgcolor: cut === c ? INK : '#F1F5F9' } }} />
-          ))}
-        </Box>
-        <Box sx={{ display: 'flex', gap: 2, flexWrap: 'wrap', alignItems: 'center' }}>
-          <ToggleButtonGroup size="small" exclusive value={portfolio}
-            onChange={(_, v) => v && setPortfolio(v)}>
-            <ToggleButton value="without" sx={{ fontSize: '0.7rem', px: 1.5 }}>Excl. W/O</ToggleButton>
-            <ToggleButton value="with" sx={{ fontSize: '0.7rem', px: 1.5 }}>With W/O</ToggleButton>
-          </ToggleButtonGroup>
-          <ToggleButtonGroup size="small" exclusive value={measure}
-            onChange={(_, v) => v && setMeasure(v)}>
-            <ToggleButton value="pos" sx={{ fontSize: '0.7rem', px: 1.5 }}>₹ POS</ToggleButton>
-            <ToggleButton value="n" sx={{ fontSize: '0.7rem', px: 1.5 }}># Loans</ToggleButton>
-          </ToggleButtonGroup>
-        </Box>
-      </Paper>
 
       {/* ── charts ───────────────────────────────────────────────────────── */}
       <Box sx={{ display: 'grid', gap: 2, mb: 2,

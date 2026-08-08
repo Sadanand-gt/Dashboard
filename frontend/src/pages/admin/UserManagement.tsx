@@ -77,11 +77,13 @@ interface FormState {
   scope_values: string[]
   all_reports: boolean
   reports: string[]
+  can_export: boolean
 }
 
 const EMPTY_FORM: FormState = {
   username: '', password: '', full_name: '', role: 'officer',
   scope_level: 'ho', scope_values: [], all_reports: true, reports: [],
+  can_export: false,
 }
 
 export function UserManagement() {
@@ -143,6 +145,7 @@ export function UserManagement() {
       scope_values: user.scope_value ? user.scope_value.split(',').map((v) => v.trim()).filter(Boolean) : [],
       all_reports: allowed.includes('*'),
       reports: allowed.includes('*') ? [] : allowed,
+      can_export: !!user.can_export,
     })
     setError(''); setMode('edit')
   }
@@ -170,7 +173,8 @@ export function UserManagement() {
     if (mode === 'create') {
       createMut.mutate({
         username: form.username, password: form.password,
-        full_name: form.full_name, role: form.role, ...scope,
+        full_name: form.full_name, role: form.role,
+        can_export: form.can_export, ...scope,
       })
     } else if (mode === 'edit' && selected) {
       updateMut.mutate({
@@ -179,6 +183,7 @@ export function UserManagement() {
           full_name: form.full_name || undefined,
           role: form.role,
           password: form.password || undefined,
+          can_export: form.can_export,
           ...scope,
         },
       })
@@ -376,6 +381,25 @@ export function UserManagement() {
                 />
               }
               label={<Box sx={{ fontSize: '0.78rem' }}>All reports</Box>}
+            />
+          </Box>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                     mt: 1.5, pt: 1.5, borderTop: '1px solid #E2E8F0' }}>
+            <Box>
+              <Box sx={{ fontSize: '0.8rem', fontWeight: 700, color: '#0F172A' }}>CSV export</Box>
+              <Box sx={{ fontSize: '0.72rem', color: '#64748B' }}>
+                Off by default. Once granted, this user can download report data as a file.
+              </Box>
+            </Box>
+            <FormControlLabel
+              control={
+                <Switch
+                  size="small"
+                  checked={form.can_export}
+                  onChange={(e) => setForm((p) => ({ ...p, can_export: e.target.checked }))}
+                />
+              }
+              label={<Box sx={{ fontSize: '0.78rem' }}>Allow export</Box>}
             />
           </Box>
           {!form.all_reports && form.role !== 'admin' && (

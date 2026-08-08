@@ -21,6 +21,7 @@ export const PATH_REPORT_KEY: Record<string, string> = {
   '/dashboard/trend':           'trend',
   '/dashboard/aml':             'aml',
   '/dashboard/ots':             'ots',
+  '/dashboard/portfolio-cuts':  'portfolio_cuts',
   '/dashboard/credit-bureau':   'credit_bureau',
 }
 
