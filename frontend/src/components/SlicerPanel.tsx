@@ -30,7 +30,8 @@ interface Slicer      { id: string; label: string; options: string[]; available:
 interface SlicerGroup { label: string; slicers: Slicer[] }
 interface FilterOptionsResponse { groups: SlicerGroup[] }
 
-const DEFAULT_EXPANDED = ['Segment & Product', 'Geography', 'Risk / Overdue']
+// Every slicer group starts collapsed; the user opens the one they want.
+const DEFAULT_EXPANDED: string[] = []
 
 export function SlicerPanel() {
   const { selections, setSelection, clearSlicer, clearAll, panelOpen, setPanelOpen, activeCount } =

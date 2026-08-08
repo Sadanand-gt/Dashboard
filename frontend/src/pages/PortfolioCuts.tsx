@@ -201,7 +201,7 @@ export function PortfolioCuts() {
                    flexWrap: 'wrap', mb: 1 }}>
           <Box sx={{ fontSize: '1.2rem', fontWeight: 700, color: INK }}>Portfolio Cuts</Box>
           <Box sx={{ fontSize: '0.75rem', color: MUTED }}>
-            live book · as of {data?.as_of ?? '—'}
+            as of {data?.as_of ?? '—'}
           </Box>
           <Box sx={{ flex: 1 }} />
           <Box sx={{ display: 'flex', gap: 1.25, alignItems: 'center', flexWrap: 'wrap' }}>
@@ -240,8 +240,8 @@ export function PortfolioCuts() {
       {/* ── KPI strip ────────────────────────────────────────────────────── */}
       <Box sx={{ display: 'grid', gap: 1, mt: 1.25, mb: 1.25,
                  gridTemplateColumns: { xs: '1fr 1fr', sm: 'repeat(3, 1fr)', md: 'repeat(6, 1fr)' } }}>
-        <KpiCard label="Loans" value={isLoading ? '—' : fmtN(grand.n_total ?? 0)} sub="live book" loading={isLoading} />
-        <KpiCard label="POS" value={isLoading ? '—' : `₹${fmtCr(grand.pos_total ?? 0)} Cr`} sub="outstanding" loading={isLoading} />
+        <KpiCard label="Loans" value={isLoading ? '—' : fmtN(grand.n_total ?? 0)} sub="" loading={isLoading} />
+        <KpiCard label="POS" value={isLoading ? '—' : `₹${fmtCr(grand.pos_total ?? 0)} Cr`} sub="" loading={isLoading} />
         <KpiCard label="PAR > 0" value={isLoading ? '—' : fmtPct(grand.par0_pct)} sub="of POS" variant="amber" loading={isLoading} />
         <KpiCard label="PAR > 30" value={isLoading ? '—' : fmtPct(grand.par30_pct)} sub="of POS" variant="amber" loading={isLoading} />
         <KpiCard label="PAR > 90" value={isLoading ? '—' : fmtPct(grand.par90_pct)} sub="of POS" variant="red" loading={isLoading} />
@@ -258,7 +258,7 @@ export function PortfolioCuts() {
             DPD mix by {cut}
           </Box>
           <Box sx={{ fontSize: '0.7rem', color: MUTED, mb: 1 }}>
-            {measure === 'pos' ? '₹ Cr' : 'loans'} per bucket — the taller the red, the deeper the arrears
+            {measure === 'pos' ? '₹ Cr' : 'loans'} per DPD bucket
           </Box>
           {isLoading ? <Skeleton variant="rectangular" height={280} /> : (
             <ResponsiveContainer width="100%" height={280}>
@@ -283,7 +283,7 @@ export function PortfolioCuts() {
             PAR &gt; 30% by {cut}
           </Box>
           <Box sx={{ fontSize: '0.7rem', color: MUTED, mb: 1 }}>
-            ranked worst first · dashed line = book average {avgPar30.toFixed(2)}%
+            dashed line = total {avgPar30.toFixed(2)}%
           </Box>
           {isLoading ? <Skeleton variant="rectangular" height={280} /> : (
             <ResponsiveContainer width="100%" height={280}>
@@ -328,9 +328,6 @@ export function PortfolioCuts() {
         <Box sx={{ px: 1.25, py: 0.75, display: 'flex', alignItems: 'baseline',
                    gap: 1, flexWrap: 'wrap', borderBottom: `1px solid ${LINE}` }}>
           <Box sx={{ fontSize: '0.8rem', fontWeight: 700, color: INK }}>{cut}</Box>
-          <Box sx={{ fontSize: '0.68rem', color: MUTED }}>
-            # loans and ₹ POS by DPD bucket · POS in ₹ Cr · PAR % of POS
-          </Box>
         </Box>
         {/* Its OWN scroll box. With only overflow-x and no height cap, sticky
             headers have no scroll region to stick within and scroll away with
