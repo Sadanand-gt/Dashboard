@@ -21,6 +21,7 @@ import {
 import { api } from '../api/client'
 import { useSlicerParams } from '../store/filterStore'
 import { TrendSection, type TrendMeasure } from './TrendSection'
+import { ExportCsvButton } from './ExportCsvButton'
 
 // ── Config types ──────────────────────────────────────────────────────────────
 export type Fmt = 'inr' | 'num' | 'pct'
@@ -151,9 +152,22 @@ export function StandardReport({
       .slice(0, 8)
   }, [data, chartField])
 
-  const sortCell = (field: string, label: string, align: 'left' | 'right' = 'right') => (
+  // Export mirrors the visible table exactly — same columns, same order, plus
+  // the Grand Total so the file reconciles on its own.
+  const exportCols = useMemo<[string, string][]>(() => ([
+    ['name', ap1Label] as [string, string],
+    ...(hasAp2 ? [['name2', ap2Label] as [string, string]] : []),
+    ...columns.map((c) => [c.field, c.label] as [string, string]),
+  ]), [ap1Label, ap2Label, hasAp2, columns])
+
+  const exportRows = useMemo(
+    () => (rows.length ? [...rows, { ...(data?.grand ?? {}), name: 'Grand Total', name2: '' }] : []),
+    [rows, data])
+
+  const sortCell = (field: string, label: string, align: 'left' | 'right' = 'right', sticky = false) => (
     <TableCell key={field} align={align} sortDirection={sortBy === field ? dir : false}
-      sx={{ fontWeight: 700, color: '#1E40AF', fontSize: '0.7rem', whiteSpace: 'nowrap' }}>
+      sx={{ fontWeight: 700, color: '#1E40AF', fontSize: '0.7rem', whiteSpace: 'nowrap',
+            ...(sticky ? { position: 'sticky', left: 0, zIndex: 3, background: '#F8FAFF' } : {}) }}>
       <TableSortLabel active={sortBy === field} direction={sortBy === field ? dir : 'asc'}
         onClick={() => {
           if (sortBy === field) setDir(dir === 'asc' ? 'desc' : 'asc')
@@ -167,10 +181,13 @@ export function StandardReport({
   return (
     <Box className="space-y-3">
       {/* ── Top bar: AP#1 / AP#2 / variant / as-of ───────────────────────── */}
+      {/* Frozen to the top: the analysis parameters govern every number below,
+          so they must stay visible and changeable while the table scrolls. */}
       <Box sx={{
         display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap',
+        position: 'sticky', top: 0, zIndex: 30,
         background: '#FFFFFF', borderRadius: 2, px: 2.5, py: 1.25,
-        border: '1px solid rgba(0,0,0,0.07)', boxShadow: '0 1px 3px rgba(0,0,0,0.04)',
+        border: '1px solid rgba(0,0,0,0.07)', boxShadow: '0 2px 8px -4px rgba(15,23,42,0.28)',
       }}>
         <Box sx={{ fontSize: '0.95rem', fontWeight: 700, color: '#1E293B' }}>{title}</Box>
         <Box sx={{ width: 1, height: 22, background: 'rgba(0,0,0,0.09)' }} />
@@ -210,6 +227,8 @@ export function StandardReport({
           </>
         )}
         <Box sx={{ flex: 1 }} />
+        <ExportCsvButton rows={exportRows} columns={exportCols}
+          filename={title.replace(/\s+/g, '_').toLowerCase()} />
         <Box sx={{ textAlign: 'right' }}>
           <Box sx={{ fontSize: '0.58rem', color: '#94A3B8', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em' }}>As of</Box>
           <Box sx={{ fontSize: '0.8rem', fontWeight: 700, color: '#1E293B' }}>{data?.as_of ?? '—'}</Box>
@@ -274,15 +293,19 @@ export function StandardReport({
             <Table size="small" stickyHeader>
               <TableHead>
                 <TableRow sx={{ '& th': { background: '#F8FAFF', borderBottom: '1px solid rgba(0,0,0,0.08)' } }}>
-                  {sortCell('name', ap1Label, 'left')}
+                  {sortCell('name', ap1Label, 'left', true)}
                   {hasAp2 && sortCell('name2', ap2Label, 'left')}
                   {columns.map((c) => sortCell(c.field, c.label))}
                 </TableRow>
               </TableHead>
               <TableBody>
                 {rows.map((r, i) => (
-                  <TableRow key={i} hover>
-                    <TableCell sx={{ fontWeight: 600, whiteSpace: 'nowrap' }}>{r.name}</TableCell>
+                  <TableRow key={i} hover sx={{ '&:nth-of-type(even)': { background: '#FCFDFF' } }}>
+                    {/* frozen: the row label stays put when the columns scroll */}
+                    <TableCell sx={{ fontWeight: 600, whiteSpace: 'nowrap',
+                                     position: 'sticky', left: 0, zIndex: 2,
+                                     background: 'inherit',
+                                     borderRight: '1px solid rgba(0,0,0,0.06)' }}>{r.name}</TableCell>
                     {hasAp2 && <TableCell sx={{ color: '#475569', whiteSpace: 'nowrap' }}>{r.name2 ?? '—'}</TableCell>}
                     {columns.map((c) => (
                       <TableCell key={c.field} align="right" sx={{
@@ -295,7 +318,9 @@ export function StandardReport({
                 ))}
                 {data?.grand && (
                   <TableRow sx={{ '& td': { fontWeight: 800, borderTop: '2px solid rgba(0,0,0,0.15)', background: '#F8FAFF' } }}>
-                    <TableCell>Grand Total</TableCell>
+                    <TableCell sx={{ position: 'sticky', left: 0, zIndex: 2,
+                                     background: '#F8FAFF',
+                                     borderRight: '1px solid rgba(0,0,0,0.06)' }}>Grand Total</TableCell>
                     {hasAp2 && <TableCell />}
                     {columns.map((c) => (
                       <TableCell key={c.field} align="right" sx={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '0.74rem' }}>

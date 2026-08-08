@@ -16,7 +16,7 @@ import pandas as pd
 from fastapi import APIRouter, Depends, Query
 
 from auth.deps import get_current_user
-from core.db import read_report
+from core.db import read_report, reports_conn
 from core.filters import hier, multi, segment_filter
 
 router = APIRouter()
@@ -268,6 +268,11 @@ def _summary(key: str, group_by: str, group_by_2: Optional[str],
     dcol = spec.get("date_col")
     if dcol and dcol in df.columns and not df.empty:
         as_of = str(df[dcol].max())
+    elif not df.empty:
+        # read_report filters to the newest report_day and drops the column, so a
+        # spec whose date_col IS report_day is left with nothing to stamp (the
+        # Write-off page showed "As of —"). Ask the store for the day it served.
+        as_of = _latest_report_day(spec["table"])
 
     # Portfolio: "without" = Excl W/O — drop written-off loans so PAR/POS match
     # Excel + Current Outstanding (mirrors ageing/od_status/dq_category/collection).
@@ -367,6 +372,22 @@ def _summary(key: str, group_by: str, group_by_2: Optional[str],
     return {"rows": rows, "grand": grand, "as_of": as_of,
             "dims": [{"value": k, "label": v[0]} for k, v in spec["dims"].items()],
             "filter": empty["filter"]}
+
+
+_LATEST_DAY_CACHE: dict = {}
+
+
+def _latest_report_day(table: str):
+    """Newest report_day held for a table, cached per process. Returns None when
+    the table has no report_day, so the caller simply shows no stamp."""
+    if table not in _LATEST_DAY_CACHE:
+        try:
+            with reports_conn() as c:
+                v = pd.read_sql(f"SELECT max(report_day) d FROM {table}", c).iloc[0, 0]
+            _LATEST_DAY_CACHE[table] = str(v) if v is not None else None
+        except Exception:
+            _LATEST_DAY_CACHE[table] = None
+    return _LATEST_DAY_CACHE[table]
 
 
 def _make(key: str):
