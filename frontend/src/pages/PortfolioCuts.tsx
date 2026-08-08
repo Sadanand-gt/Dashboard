@@ -15,7 +15,7 @@ import ToggleButtonGroup from '@mui/material/ToggleButtonGroup'
 import Tooltip from '@mui/material/Tooltip'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip as RTooltip, ResponsiveContainer,
-  CartesianGrid, Legend, ScatterChart, Scatter, ZAxis, Cell, ReferenceLine,
+  CartesianGrid, Legend, Cell, ReferenceLine, LabelList,
 } from 'recharts'
 import { api } from '../api/client'
 import { KpiCard } from '../components/KpiCard'
@@ -55,7 +55,8 @@ const fmtPct = (n: number) => `${(n ?? 0).toFixed(2)}%`
 // Export mirrors the on-screen matrix, in the same column order, so a
 // downloaded file and the page can be read side by side.
 const EXPORT_COLS: [string, string][] = [
-  ['name', 'Cut'],
+  ['segment', 'Business Segment'],
+  ['cut', 'Cut'],
   ['n_regular', '# Regular'], ['n_1_30', '# 1-30'], ['n_31_60', '# 31-60'],
   ['n_61_90', '# 61-90'], ['n_91_180', '# 91-180'], ['n_181_360', '# 181-360'],
   ['n_360_plus', '# 360+'], ['n_total', '# Total'],
@@ -67,6 +68,14 @@ const EXPORT_COLS: [string, string][] = [
   ['wo3m_count', 'Write-off 3M #'], ['wo3m_amount', 'Write-off 3M Rs'],
 ]
 
+// Additive measures — safe to sum when rolling rows up.
+const SUM_FIELDS = [
+  'n_regular', 'n_1_30', 'n_31_60', 'n_61_90', 'n_91_180', 'n_181_360', 'n_360_plus', 'n_total',
+  'pos_regular', 'pos_1_30', 'pos_31_60', 'pos_61_90', 'pos_91_180', 'pos_181_360',
+  'pos_360_plus', 'pos_total', 'par0_pos', 'par30_pos', 'par60_pos', 'par90_pos',
+  'wo3m_count', 'wo3m_amount',
+]
+
 type Row = Record<string, any>
 
 export function PortfolioCuts() {
@@ -76,7 +85,16 @@ export function PortfolioCuts() {
   const [measure, setMeasure] = useState<'pos' | 'n'>('pos')
   const [showCharts, setShowCharts] = useState(true)
 
-  const params = { ...slicer, group_by: 'cut_value', pick: cut, portfolio }
+  // Excel's sheets are two-level pivots: Business Segment down the side with the
+  // cut nested under it (verified against sheets 29-39, which carry
+  // col0=Business Segment, col1=the cut). The page mirrors that shape.
+  // Sheet 28 (Business Segment) is single-level in Excel — nesting a dimension
+  // under itself would double every row — so that one cut asks for one level.
+  const nested = cut !== 'Business Segment'
+  const params = {
+    ...slicer, group_by: 'business_segment', pick: cut, portfolio,
+    ...(nested ? { group_by_2: 'cut_value' } : {}),
+  }
   const { data, isLoading } = useQuery({
     queryKey: ['portfolio-cuts', params],
     queryFn: () => api.get('/api/portfolio-cuts/summary', { params }).then((r) => r.data),
@@ -85,34 +103,87 @@ export function PortfolioCuts() {
   const rows: Row[] = data?.rows ?? []
   const grand: Row = data?.grand ?? {}
 
+  // Sum the additive measures and re-derive the PAR ratios from the summed POS —
+  // a percentage cannot be averaged across rows.
+  const roll = (items: Row[], name: string): Row => {
+    const o: Row = { name }
+    SUM_FIELDS.forEach((f) => { o[f] = items.reduce((a, b) => a + (Number(b[f]) || 0), 0) })
+    const p = Number(o.pos_total) || 0
+    o.par0_pct = p ? +(o.par0_pos / p * 100).toFixed(2) : 0
+    o.par30_pct = p ? +(o.par30_pos / p * 100).toFixed(2) : 0
+    o.par60_pct = p ? +(o.par60_pos / p * 100).toFixed(2) : 0
+    o.par90_pct = p ? +(o.par90_pos / p * 100).toFixed(2) : 0
+    return o
+  }
+
+  // Nested view: one block per Business Segment, its cut values beneath.
+  const segments = useMemo(() => {
+    const by = new Map<string, Row[]>()
+    rows.forEach((r) => {
+      const k = String(r.name ?? '—')
+      if (!by.has(k)) by.set(k, [])
+      by.get(k)!.push(r)
+    })
+    return [...by.entries()].map(([seg, items]) => ({
+      seg, items, subtotal: roll(items, seg),
+    }))
+  }, [rows])
+
+  // Charts read the CUT level, rolled across segments — the cut is the question
+  // being asked; the segment split lives in the table.
+  const byCut = useMemo(() => {
+    const by = new Map<string, Row[]>()
+    rows.forEach((r) => {
+      // name2 is the cut when nested; when the cut IS Business Segment there is
+      // only one level, so the cut lives in name.
+      const k = String(r.name2 ?? r.name ?? '—')
+      if (!by.has(k)) by.set(k, [])
+      by.get(k)!.push(r)
+    })
+    return [...by.entries()].map(([k, items]) => roll(items, k))
+  }, [rows])
+
   // Concentration vs risk: x = share of the book, y = PAR>30%, bubble = POS.
   // This is the view no single Excel sheet gives — it answers "which slices are
   // big AND deteriorating" in one glance.
-  const scatter = useMemo(() => {
+  const risk = useMemo(() => {
     const tot = Number(grand.pos_total) || 0
-    return rows.map((r) => ({
+    return byCut.map((r) => ({
       name: r.name,
       share: tot ? (Number(r.pos_total) / tot) * 100 : 0,
       par30: Number(r.par30_pct) || 0,
       pos: Number(r.pos_total) || 0,
       n: Number(r.n_total) || 0,
-    }))
-  }, [rows, grand])
+    })).sort((a, b) => b.par30 - a.par30)
+  }, [byCut, grand])
 
   const avgPar30 = Number(grand.par30_pct) || 0
 
   // Rows plus the Grand Total, so the file reconciles on its own.
-  const exportRows = useMemo(
-    () => (rows.length ? [...rows, { ...grand, name: 'Grand Total' }] : []),
-    [rows, grand])
+  // Export mirrors the nested table: each segment subtotal followed by its cuts.
+  const exportRows = useMemo(() => {
+    if (!rows.length) return []
+    const out: Row[] = []
+    if (!nested) {
+      rows.forEach((r) => out.push({ ...r, segment: r.name, cut: r.name }))
+      out.push({ ...grand, segment: 'Grand Total', cut: '' })
+      return out
+    }
+    segments.forEach(({ seg, items, subtotal }) => {
+      out.push({ ...subtotal, segment: seg, cut: 'ALL' })
+      items.forEach((r) => out.push({ ...r, segment: seg, cut: r.name2 }))
+    })
+    out.push({ ...grand, segment: 'Grand Total', cut: '' })
+    return out
+  }, [rows, segments, grand, nested])
 
-  const stacked = useMemo(() => rows.map((r) => {
+  const stacked = useMemo(() => byCut.map((r) => {
     const o: Row = { name: r.name }
     BUCKETS.forEach((b) => {
       o[b.label] = measure === 'pos' ? cr(Number(r[`pos_${b.key}`]) || 0) : Number(r[`n_${b.key}`]) || 0
     })
     return o
-  }), [rows, measure])
+  }), [byCut, measure])
 
   return (
     <Box sx={{ p: 2.5 }}>
@@ -207,42 +278,42 @@ export function PortfolioCuts() {
 
         <Paper variant="outlined" sx={{ p: 1.5, borderColor: LINE }}>
           <Box sx={{ fontSize: '0.82rem', fontWeight: 700, color: INK }}>
-            Concentration vs risk
+            PAR &gt; 30% by {cut}
           </Box>
           <Box sx={{ fontSize: '0.7rem', color: MUTED, mb: 1 }}>
-            share of POS (x) against PAR&gt;30% (y), bubble = POS. Top-right = large and deteriorating.
+            ranked worst first · dashed line = book average {avgPar30.toFixed(2)}%
           </Box>
           {isLoading ? <Skeleton variant="rectangular" height={280} /> : (
             <ResponsiveContainer width="100%" height={280}>
-              <ScatterChart margin={{ top: 8, right: 12, left: 0, bottom: 16 }}>
-                <CartesianGrid strokeDasharray="3 3" stroke={LINE} />
-                <XAxis type="number" dataKey="share" name="Share of POS" unit="%"
-                       tick={{ fontSize: 10, fill: MUTED }}
-                       label={{ value: 'share of POS %', position: 'insideBottom', offset: -8,
-                                style: { fontSize: 10, fill: MUTED } }} />
-                <YAxis type="number" dataKey="par30" name="PAR>30" unit="%"
-                       tick={{ fontSize: 10, fill: MUTED }} />
-                <ZAxis type="number" dataKey="pos" range={[60, 700]} />
-                <ReferenceLine y={avgPar30} stroke="#94A3B8" strokeDasharray="4 4"
-                               label={{ value: `book ${avgPar30.toFixed(2)}%`, position: 'right',
-                                        style: { fontSize: 9, fill: MUTED } }} />
-                <RTooltip cursor={{ strokeDasharray: '3 3' }} content={({ active, payload }: any) => {
-                  if (!active || !payload?.length) return null
-                  const d = payload[0].payload
-                  return (
-                    <Paper variant="outlined" sx={{ p: 1, fontSize: '0.72rem', borderColor: LINE }}>
-                      <Box sx={{ fontWeight: 700, color: INK }}>{d.name}</Box>
-                      <Box sx={{ color: MUTED }}>₹{fmtCr(d.pos)} Cr · {fmtN(d.n)} loans</Box>
-                      <Box sx={{ color: MUTED }}>{d.share.toFixed(1)}% of book · PAR&gt;30 {d.par30.toFixed(2)}%</Box>
-                    </Paper>
-                  )
-                }} />
-                <Scatter data={scatter}>
-                  {scatter.map((d, i) => (
-                    <Cell key={i} fill={d.par30 > avgPar30 ? '#DC2626' : '#16A34A'} fillOpacity={0.65} />
+              <BarChart data={risk} layout="vertical"
+                        margin={{ top: 4, right: 44, left: 4, bottom: 4 }}>
+                <CartesianGrid strokeDasharray="3 3" stroke={LINE} horizontal={false} />
+                <XAxis type="number" tick={{ fontSize: 10, fill: MUTED }} unit="%" />
+                <YAxis type="category" dataKey="name" width={124}
+                       tick={{ fontSize: 10, fill: MUTED }} interval={0} />
+                <ReferenceLine x={avgPar30} stroke="#94A3B8" strokeDasharray="4 4" />
+                <RTooltip cursor={{ fill: 'rgba(15,23,42,0.04)' }}
+                  content={({ active, payload }: any) => {
+                    if (!active || !payload?.length) return null
+                    const d = payload[0].payload
+                    return (
+                      <Paper variant="outlined" sx={{ p: 1, fontSize: '0.72rem', borderColor: LINE }}>
+                        <Box sx={{ fontWeight: 700, color: INK }}>{d.name}</Box>
+                        <Box sx={{ color: MUTED }}>PAR&gt;30 {d.par30.toFixed(2)}%</Box>
+                        <Box sx={{ color: MUTED }}>₹{fmtCr(d.pos)} Cr · {d.share.toFixed(1)}% of book</Box>
+                        <Box sx={{ color: MUTED }}>{fmtN(d.n)} loans</Box>
+                      </Paper>
+                    )
+                  }} />
+                <Bar dataKey="par30" radius={[0, 3, 3, 0]} maxBarSize={22}>
+                  {risk.map((d, i) => (
+                    <Cell key={i} fill={d.par30 > avgPar30 ? '#DC2626' : '#16A34A'} fillOpacity={0.85} />
                   ))}
-                </Scatter>
-              </ScatterChart>
+                  <LabelList dataKey="par30" position="right"
+                             formatter={(v: number) => `${v.toFixed(1)}%`}
+                             style={{ fontSize: 9, fill: MUTED }} />
+                </Bar>
+              </BarChart>
             </ResponsiveContainer>
           )}
         </Paper>
@@ -264,7 +335,7 @@ export function PortfolioCuts() {
               <TableRow>
                 <TableCell sx={{ fontWeight: 700, fontSize: '0.7rem', position: 'sticky',
                                  left: 0, zIndex: 3, background: '#fff',
-                                 borderRight: `1px solid ${LINE}` }}>{cut}</TableCell>
+                                 borderRight: `1px solid ${LINE}` }}>{nested ? `Business Segment / ${cut}` : cut}</TableCell>
                 {BUCKETS.map((b) => (
                   <TableCell key={`n${b.key}`} align="right" sx={{ fontWeight: 700, fontSize: '0.7rem' }}>{b.label}</TableCell>
                 ))}
@@ -287,19 +358,20 @@ export function PortfolioCuts() {
                 <TableRow><TableCell colSpan={15}><Skeleton height={180} /></TableCell></TableRow>
               )}
               {!isLoading && rows.length === 0 && (
-                <TableRow><TableCell colSpan={15} align="center"
+                <TableRow><TableCell colSpan={16} align="center"
                   sx={{ py: 5, color: MUTED, fontSize: '0.85rem' }}>
                   No loans for this selection.
                 </TableCell></TableRow>
               )}
-              {!isLoading && rows.map((r) => (
+              {/* Single-level: the cut IS Business Segment, so render it flat. */}
+              {!isLoading && !nested && rows.map((r) => (
                 <TableRow key={r.name} hover sx={{ '&:nth-of-type(even)': { background: '#FCFDFF' } }}>
                   <TableCell sx={{ fontSize: '0.75rem', fontWeight: 600, position: 'sticky',
                                    left: 0, zIndex: 2, background: 'inherit',
                                    borderRight: `1px solid ${LINE}` }}>{r.name}</TableCell>
-                  {BUCKETS.map((b) => (
-                    <TableCell key={b.key} align="right" sx={{ fontSize: '0.75rem' }}>
-                      {fmtN(r[`n_${b.key}`] ?? 0)}
+                  {BUCKETS.map((bk) => (
+                    <TableCell key={bk.key} align="right" sx={{ fontSize: '0.75rem' }}>
+                      {fmtN(r[`n_${bk.key}`] ?? 0)}
                     </TableCell>
                   ))}
                   <TableCell align="right" sx={{ fontSize: '0.75rem', fontWeight: 700, borderRight: `1px solid ${LINE}` }}>
@@ -308,16 +380,62 @@ export function PortfolioCuts() {
                   <TableCell align="right" sx={{ fontSize: '0.75rem', fontWeight: 700 }}>{fmtCr(r.pos_total ?? 0)}</TableCell>
                   <TableCell align="right" sx={{ fontSize: '0.75rem' }}>{fmtPct(r.par0_pct)}</TableCell>
                   <TableCell align="right" sx={{ fontSize: '0.75rem' }}>{fmtPct(r.par30_pct)}</TableCell>
-                  <TableCell align="right" sx={{ fontSize: '0.75rem',
-                    color: (r.par90_pct ?? 0) > (grand.par90_pct ?? 0) ? '#DC2626' : 'inherit',
-                    fontWeight: (r.par90_pct ?? 0) > (grand.par90_pct ?? 0) ? 700 : 400 }}>
-                    {fmtPct(r.par90_pct)}
-                  </TableCell>
+                  <TableCell align="right" sx={{ fontSize: '0.75rem' }}>{fmtPct(r.par90_pct)}</TableCell>
                   <TableCell align="right" sx={{ fontSize: '0.75rem', color: MUTED }}>{fmtPct(r.par60_pct)}</TableCell>
                   <TableCell align="right" sx={{ fontSize: '0.75rem', borderLeft: `1px solid ${LINE}` }}>{fmtN(r.wo3m_count ?? 0)}</TableCell>
                   <TableCell align="right" sx={{ fontSize: '0.75rem' }}>{fmtCr(r.wo3m_amount ?? 0)}</TableCell>
                 </TableRow>
               ))}
+              {/* Business Segment subtotal, then its cut values beneath —
+                  the same shape as the Excel pivot. */}
+              {!isLoading && nested && segments.map(({ seg, items, subtotal }) => [
+                <TableRow key={`s-${seg}`} sx={{ bgcolor: '#F1F5F9' }}>
+                  <TableCell sx={{ fontSize: '0.75rem', fontWeight: 800, position: 'sticky',
+                                   left: 0, zIndex: 2, background: '#F1F5F9',
+                                   borderRight: `1px solid ${LINE}` }}>{seg}</TableCell>
+                  {BUCKETS.map((bk) => (
+                    <TableCell key={bk.key} align="right" sx={{ fontSize: '0.75rem', fontWeight: 700 }}>
+                      {fmtN(subtotal[`n_${bk.key}`] ?? 0)}
+                    </TableCell>
+                  ))}
+                  <TableCell align="right" sx={{ fontSize: '0.75rem', fontWeight: 800, borderRight: `1px solid ${LINE}` }}>
+                    {fmtN(subtotal.n_total ?? 0)}
+                  </TableCell>
+                  <TableCell align="right" sx={{ fontSize: '0.75rem', fontWeight: 800 }}>{fmtCr(subtotal.pos_total ?? 0)}</TableCell>
+                  <TableCell align="right" sx={{ fontSize: '0.75rem', fontWeight: 700 }}>{fmtPct(subtotal.par0_pct)}</TableCell>
+                  <TableCell align="right" sx={{ fontSize: '0.75rem', fontWeight: 700 }}>{fmtPct(subtotal.par30_pct)}</TableCell>
+                  <TableCell align="right" sx={{ fontSize: '0.75rem', fontWeight: 700 }}>{fmtPct(subtotal.par90_pct)}</TableCell>
+                  <TableCell align="right" sx={{ fontSize: '0.75rem', fontWeight: 700, color: MUTED }}>{fmtPct(subtotal.par60_pct)}</TableCell>
+                  <TableCell align="right" sx={{ fontSize: '0.75rem', fontWeight: 700, borderLeft: `1px solid ${LINE}` }}>{fmtN(subtotal.wo3m_count ?? 0)}</TableCell>
+                  <TableCell align="right" sx={{ fontSize: '0.75rem', fontWeight: 700 }}>{fmtCr(subtotal.wo3m_amount ?? 0)}</TableCell>
+                </TableRow>,
+                ...items.map((r) => (
+                  <TableRow key={`${seg}-${r.name2}`} hover sx={{ '&:nth-of-type(even)': { background: '#FCFDFF' } }}>
+                    <TableCell sx={{ fontSize: '0.75rem', pl: 3, color: '#334155', position: 'sticky',
+                                     left: 0, zIndex: 2, background: 'inherit',
+                                     borderRight: `1px solid ${LINE}` }}>{r.name2 ?? '—'}</TableCell>
+                    {BUCKETS.map((bk) => (
+                      <TableCell key={bk.key} align="right" sx={{ fontSize: '0.75rem' }}>
+                        {fmtN(r[`n_${bk.key}`] ?? 0)}
+                      </TableCell>
+                    ))}
+                    <TableCell align="right" sx={{ fontSize: '0.75rem', fontWeight: 700, borderRight: `1px solid ${LINE}` }}>
+                      {fmtN(r.n_total ?? 0)}
+                    </TableCell>
+                    <TableCell align="right" sx={{ fontSize: '0.75rem', fontWeight: 700 }}>{fmtCr(r.pos_total ?? 0)}</TableCell>
+                    <TableCell align="right" sx={{ fontSize: '0.75rem' }}>{fmtPct(r.par0_pct)}</TableCell>
+                    <TableCell align="right" sx={{ fontSize: '0.75rem' }}>{fmtPct(r.par30_pct)}</TableCell>
+                    <TableCell align="right" sx={{ fontSize: '0.75rem',
+                      color: (r.par90_pct ?? 0) > (grand.par90_pct ?? 0) ? '#DC2626' : 'inherit',
+                      fontWeight: (r.par90_pct ?? 0) > (grand.par90_pct ?? 0) ? 700 : 400 }}>
+                      {fmtPct(r.par90_pct)}
+                    </TableCell>
+                    <TableCell align="right" sx={{ fontSize: '0.75rem', color: MUTED }}>{fmtPct(r.par60_pct)}</TableCell>
+                    <TableCell align="right" sx={{ fontSize: '0.75rem', borderLeft: `1px solid ${LINE}` }}>{fmtN(r.wo3m_count ?? 0)}</TableCell>
+                    <TableCell align="right" sx={{ fontSize: '0.75rem' }}>{fmtCr(r.wo3m_amount ?? 0)}</TableCell>
+                  </TableRow>
+                )),
+              ])}
               {!isLoading && rows.length > 0 && (
                 <TableRow sx={{ bgcolor: '#F8FAFC' }}>
                   <TableCell sx={{ fontSize: '0.75rem', fontWeight: 800, position: 'sticky',
