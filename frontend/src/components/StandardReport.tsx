@@ -90,6 +90,9 @@ function fmtVal(v: unknown, f: Fmt): string {
 const riskColor = (v: number) => (v >= 5 ? '#DC2626' : v >= 2 ? '#D97706' : '#16A34A')
 const BAR_COLORS = ['#1565C0', '#0F766E', '#7C3AED', '#D97706', '#DC2626', '#0891B2']
 
+// Height of the sticky analysis-parameter bar.
+const BAR_H = 58
+
 export function StandardReport({
   title, endpoint, kpis, columns, chartField, chartLabel, chartFmt, variant, note, portfolio, trend,
 }: Props) {
@@ -179,14 +182,14 @@ export function StandardReport({
   )
 
   return (
-    <Box className="space-y-3">
+    <Box className="space-y-2">
       {/* ── Top bar: AP#1 / AP#2 / variant / as-of ───────────────────────── */}
       {/* Frozen to the top: the analysis parameters govern every number below,
           so they must stay visible and changeable while the table scrolls. */}
       <Box sx={{
         display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap',
         position: 'sticky', top: 0, zIndex: 30,
-        background: '#FFFFFF', borderRadius: 2, px: 2.5, py: 1.25,
+        background: '#FFFFFF', borderRadius: 2, px: 2, py: 0.9,
         border: '1px solid rgba(0,0,0,0.07)', boxShadow: '0 2px 8px -4px rgba(15,23,42,0.28)',
       }}>
         <Box sx={{ fontSize: '0.95rem', fontWeight: 700, color: '#1E293B' }}>{title}</Box>
@@ -289,8 +292,10 @@ export function StandardReport({
             {[1, 2, 3, 4, 5].map((i) => <Skeleton key={i} height={28} />)}
           </Box>
         ) : (
-          <Box sx={{ overflowX: 'auto', maxHeight: 460 }}>
-            <Table size="small" stickyHeader>
+          <Box sx={{ overflow: 'auto', maxHeight: 'calc(100vh - 260px)' }}>
+            {/* Parked under the sticky parameter bar; at top:0 the column
+                headers slide behind it and vanish while scrolling. */}
+            <Table size="small" stickyHeader sx={{ '& thead th': { top: 0 } }}>
               <TableHead>
                 <TableRow sx={{ '& th': { background: '#F8FAFF', borderBottom: '1px solid rgba(0,0,0,0.08)' } }}>
                   {sortCell('name', ap1Label, 'left', true)}

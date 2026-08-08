@@ -31,6 +31,8 @@ const BUCKET_COLORS: Record<string, string> = {
 const INK = '#0F172A'
 const MUTED = '#64748B'
 const LINE = '#E2E8F0'
+// Height of the sticky command bar — the table header parks just under it.
+const BAR_H = 88
 
 // The 11 cuts built by pipeline/queries/portfolio_cuts.sql. Location Type is not
 // here: Excel sources RURAL/URBAN from the AUM Loandump and the replica has no
@@ -186,13 +188,13 @@ export function PortfolioCuts() {
   }), [byCut, measure])
 
   return (
-    <Box sx={{ p: 2.5 }}>
+    <Box sx={{ px: 1.5, pb: 1.5 }}>
       {/* ── STICKY COMMAND BAR — title, cuts, view toggles, export ──────
            Frozen to the top so the cut you are looking at stays named and
            switchable while you scroll a long matrix. It sits ABOVE the KPI
            cards because the cut governs every number below it. ──────────── */}
       <Box sx={{ position: 'sticky', top: 0, zIndex: 30, bgcolor: '#fff',
-                 pt: 2, pb: 1, mx: -2.5, px: 2.5,
+                 pt: 1.25, pb: 0.85, mx: -1.5, px: 1.5,
                  borderBottom: `1px solid ${LINE}`,
                  boxShadow: '0 2px 6px -4px rgba(15,23,42,0.25)' }}>
         <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1.5,
@@ -236,7 +238,7 @@ export function PortfolioCuts() {
       </Box>
 
       {/* ── KPI strip ────────────────────────────────────────────────────── */}
-      <Box sx={{ display: 'grid', gap: 1.5, mt: 2, mb: 2,
+      <Box sx={{ display: 'grid', gap: 1, mt: 1.25, mb: 1.25,
                  gridTemplateColumns: { xs: '1fr 1fr', sm: 'repeat(3, 1fr)', md: 'repeat(6, 1fr)' } }}>
         <KpiCard label="Loans" value={isLoading ? '—' : fmtN(grand.n_total ?? 0)} sub="live book" loading={isLoading} />
         <KpiCard label="POS" value={isLoading ? '—' : `₹${fmtCr(grand.pos_total ?? 0)} Cr`} sub="outstanding" loading={isLoading} />
@@ -249,7 +251,7 @@ export function PortfolioCuts() {
 
       {/* ── charts (collapsible — the matrix is the deliverable) ─────────── */}
       {showCharts && (
-      <Box sx={{ display: 'grid', gap: 2, mb: 2,
+      <Box sx={{ display: 'grid', gap: 1.25, mb: 1.25,
                  gridTemplateColumns: { xs: '1fr', lg: '1.15fr 1fr' } }}>
         <Paper variant="outlined" sx={{ p: 1.5, borderColor: LINE }}>
           <Box sx={{ fontSize: '0.82rem', fontWeight: 700, color: INK }}>
@@ -323,14 +325,21 @@ export function PortfolioCuts() {
 
       {/* ── the Excel matrix ─────────────────────────────────────────────── */}
       <Paper variant="outlined" sx={{ borderColor: LINE }}>
-        <Box sx={{ p: 1.5, pb: 1 }}>
-          <Box sx={{ fontSize: '0.82rem', fontWeight: 700, color: INK }}>{cut}</Box>
-          <Box sx={{ fontSize: '0.7rem', color: MUTED }}>
+        <Box sx={{ px: 1.25, py: 0.75, display: 'flex', alignItems: 'baseline',
+                   gap: 1, flexWrap: 'wrap', borderBottom: `1px solid ${LINE}` }}>
+          <Box sx={{ fontSize: '0.8rem', fontWeight: 700, color: INK }}>{cut}</Box>
+          <Box sx={{ fontSize: '0.68rem', color: MUTED }}>
             # loans and ₹ POS by DPD bucket · POS in ₹ Cr · PAR % of POS
           </Box>
         </Box>
-        <Box sx={{ overflowX: 'auto' }}>
-          <Table size="small" stickyHeader sx={{ minWidth: 1180 }}>
+        {/* Its OWN scroll box. With only overflow-x and no height cap, sticky
+            headers have no scroll region to stick within and scroll away with
+            the page — which is exactly what they were doing. */}
+        <Box sx={{ overflow: 'auto', maxHeight: 'calc(100vh - 250px)' }}>
+          {/* BAR_H clears the sticky command bar above; without the offset the
+              column headers slide underneath it and disappear. */}
+          <Table size="small" stickyHeader
+                 sx={{ minWidth: 1180, '& thead th': { top: 0 } }}>
             <TableHead>
               <TableRow>
                 <TableCell sx={{ fontWeight: 700, fontSize: '0.7rem', position: 'sticky',

@@ -20,7 +20,9 @@ export const useFilterStore = create<FilterState>((set, get) => ({
   // permanent fixture, and the reports need the width more than the
   // panel does. The user opens it from the right-edge strip.
   panelOpen: false,
-  sidebarOpen: true,
+  // Nav collapses to an icon rail by default too — these reports are wide and
+  // the rail still shows every destination.
+  sidebarOpen: false,
 
   setSelection: (id, values) =>
     set((s) => {
