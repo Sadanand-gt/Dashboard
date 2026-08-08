@@ -44,8 +44,13 @@ hierarchy AS (
 il_loans AS (
     SELECT
         CASE
+            -- %SECURED% belongs here too. Without it SECURED_TOP_UP loans fell
+            -- into IEL, so this file reported LAP 88 while aum_status.sql (which
+            -- has the clause) and Excel both reported 91. Verified 2026-08-08:
+            -- 10038007, 10039190, 10040094 — Rs 2,63,835.
             WHEN upper(trim(la.product_id::text)) LIKE '%SUGAM%'
               OR upper(trim(la.product_id::text)) LIKE '%UDYOGINI%'
+              OR upper(trim(la.product_id::text)) LIKE '%SECURED%'
             THEN 'LAP'
             ELSE 'IEL'
         END                                    AS loan_source,

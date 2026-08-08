@@ -55,6 +55,10 @@ il_loans AS (
     SELECT
         CASE WHEN upper(trim(la.product_id::text)) LIKE '%SUGAM%'
                OR upper(trim(la.product_id::text)) LIKE '%UDYOGINI%'
+               -- %SECURED% belongs with LAP. Omitting it put SECURED_TOP_UP loans
+               -- in IEL, so this file disagreed with aum_status.sql and Excel
+               -- (LAP 88 vs 91). Verified 2026-08-08: 10038007, 10039190, 10040094.
+               OR upper(trim(la.product_id::text)) LIKE '%SECURED%'
              THEN 'LAP' ELSE 'IEL' END AS loan_source,
         la.loan_id, la.branch_id, la.loan_officer::varchar AS lo_id,
         la.product_id::text AS product_id,
