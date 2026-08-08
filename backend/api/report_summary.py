@@ -113,6 +113,42 @@ SPECS: dict = {
         "filter_col": "pull_year",
         "filter_label": "Pull Year",
     },
+    "portfolio_cuts": {
+        "table": "rpt_portfolio_cuts",
+        # One tall table holding 11 cuts. The page picks a cut_type; cut_value is
+        # then the row dimension. cut_rank carries the intended band order so
+        # "1 - 12 M" never sorts after "> 36 M".
+        "dims": {**COMMON_DIMS,
+                 "business_segment": ("Business Segment", "business_segment"),
+                 "cut_value":        ("Cut",              "cut_value"),
+                 "loan_status":      ("Loan Status",      "loan_status")},
+        "sums": ["n_regular", "n_1_30", "n_31_60", "n_61_90", "n_91_180",
+                 "n_181_360", "n_360_plus", "n_total",
+                 "pos_regular", "pos_1_30", "pos_31_60", "pos_61_90", "pos_91_180",
+                 "pos_181_360", "pos_360_plus", "pos_total",
+                 "par0_pos", "par30_pos", "par60_pos", "par90_pos",
+                 "wo3m_count", "wo3m_amount"],
+        # Derived from the POS sums, never stored, so they stay correct under any
+        # grouping. par60_pct reproduces the Excel sheet's "PAR > 90 %" column,
+        # which is arithmetically DPD > 60 — see portfolio_cuts.sql.
+        "ratios": {"par0_pct":  ("par0_pos",  "pos_total"),
+                   "par30_pct": ("par30_pos", "pos_total"),
+                   "par60_pct": ("par60_pos", "pos_total"),
+                   "par90_pct": ("par90_pos", "pos_total")},
+        # These describe the written-off book, so they survive the Excl-W/O view.
+        "portfolio_exempt_sums": ["wo3m_count", "wo3m_amount"],
+        # data_date, not report_day: read_report already filters to the latest
+        # report_day and drops the column, and data_date is the more honest
+        # label anyway — it is the T-1 date the figures describe, not the date
+        # the pipeline happened to run.
+        # Bands must never sort alphabetically ("1 - 12 M" after "> 36 M").
+        # cut_rank is written by the pipeline and carries the intended order.
+        "order_col": "cut_rank",
+        "date_col": "data_date",
+        "filter_col": "cut_type",
+        "filter_label": "Portfolio Cut",
+    },
+
     "ots": {
         "table": "rpt_ots",
         # business_segment is a REAL column here (IEL / LAP / JLG) — override the
@@ -235,7 +271,18 @@ def _summary(key: str, group_by: str, group_by_2: Optional[str],
 
     # Portfolio: "without" = Excl W/O — drop written-off loans so PAR/POS match
     # Excel + Current Outstanding (mirrors ageing/od_status/dq_category/collection).
+    #
+    # "portfolio_exempt_sums" are measures that describe the WRITTEN-OFF book
+    # itself and therefore live on loan_status='Write-off' rows. Dropping those
+    # rows would zero the measure, so their per-group totals are taken BEFORE the
+    # filter and merged back afterwards. Portfolio Cuts needs this: its
+    # "write-off in last 3 months" columns sit beside live-book POS on the same
+    # Excel row, and the Excl-W/O view must not blank them out.
+    exempt = [c for c in spec.get("portfolio_exempt_sums", []) if c in df.columns]
+    exempt_pre = None
     if (f.get("portfolio") or "with") == "without" and "loan_status" in df.columns:
+        if exempt:
+            exempt_pre = df.copy()
         df = df[df["loan_status"].astype(str) != "Write-off"]
 
     df = segment_filter(df, f.get("segment") or "ALL")
@@ -261,6 +308,7 @@ def _summary(key: str, group_by: str, group_by_2: Optional[str],
     for c in sums:
         df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
 
+
     # "ratios" are PERCENTAGES (x100). "averages" are plain num/den — a per-pull
     # lender count or an average rupee amount must NOT be multiplied by 100
     # (avg_mfi_lenders rendered as 147.25 instead of 1.47 before this split).
@@ -278,15 +326,42 @@ def _summary(key: str, group_by: str, group_by_2: Optional[str],
     keys = [g1] + ([g2] if g2 else [])
     grouped = df.groupby(keys, dropna=False)[sums].sum().reset_index()
 
+    # Re-attach the write-off-book measures the Excl-W/O filter removed. Done
+    # AFTER grouping: merging pre-aggregation would broadcast each group's total
+    # onto every row of that group and the groupby would then multiply it.
+    if exempt_pre is not None and exempt:
+        for c in exempt:
+            exempt_pre[c] = pd.to_numeric(exempt_pre[c], errors="coerce").fillna(0)
+        add = exempt_pre.groupby(keys, dropna=False)[exempt].sum().reset_index()
+        grouped = grouped.drop(columns=exempt, errors="ignore").merge(add, on=keys, how="left")
+        for c in exempt:
+            grouped[c] = pd.to_numeric(grouped[c], errors="coerce").fillna(0)
+
     rows = []
     for _, r in grouped.iterrows():
         rec = {"name": str(r[g1]), **{c: round(float(r[c]), 2) for c in sums}}
         if g2:
             rec["name2"] = str(r[g2])
         rows.append(derive(rec))
-    rows.sort(key=lambda x: (_order_key(g1, x["name"]), _order_key(g2 or "", x.get("name2", ""))))
+    # An "order_col" (e.g. cut_rank) is authoritative when present: it is written
+    # by the pipeline precisely so bands do not sort as text. Falls back to
+    # _order_key, which handles the canonical DPD bucket order.
+    ocol = spec.get("order_col")
+    if ocol and ocol in df.columns:
+        rank = (df.groupby(keys, dropna=False)[ocol].max().reset_index()
+                  .set_index([str(k) for k in keys] if False else keys)[ocol].to_dict())
+        def _rank_of(rec):
+            k = (rec["name"],) if not g2 else (rec["name"], rec.get("name2"))
+            v = rank.get(k[0] if len(k) == 1 else k)
+            return (0, float(v)) if v is not None else (1, 0.0)
+        rows.sort(key=lambda x: (_rank_of(x), str(x["name"]), str(x.get("name2", ""))))
+    else:
+        rows.sort(key=lambda x: (_order_key(g1, x["name"]), _order_key(g2 or "", x.get("name2", ""))))
 
-    grand = derive({c: round(float(df[c].sum()), 2) for c in sums})
+    _gsrc = {c: (exempt_pre[c] if (exempt_pre is not None and c in exempt) else df[c])
+             for c in sums}
+    grand = derive({c: round(float(pd.to_numeric(v, errors="coerce").fillna(0).sum()), 2)
+                    for c, v in _gsrc.items()})
     grand["name"] = "Grand Total"
 
     return {"rows": rows, "grand": grand, "as_of": as_of,
@@ -314,4 +389,5 @@ router.add_api_route("/delinquencies/summary", _make("delinquencies"), methods=[
 router.add_api_route("/case-movement/summary", _make("case_movement"), methods=["GET"])
 router.add_api_route("/writeoff/summary", _make("writeoff"), methods=["GET"])
 router.add_api_route("/ots/summary", _make("ots"), methods=["GET"])
+router.add_api_route("/portfolio-cuts/summary", _make("portfolio_cuts"), methods=["GET"])
 router.add_api_route("/credit-bureau/summary", _make("credit_bureau"), methods=["GET"])

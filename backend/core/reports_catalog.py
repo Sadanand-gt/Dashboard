@@ -30,6 +30,7 @@ REPORT_CATALOG: list[dict] = [
     {"key": "trend",           "label": "Monthly Trend",       "path": "/dashboard/trend"},
     {"key": "aml",             "label": "AML Risk Category",   "path": "/dashboard/aml"},
     {"key": "ots",             "label": "OTS & Recovery",      "path": "/dashboard/ots"},
+    {"key": "portfolio_cuts",  "label": "Portfolio Cuts",      "path": "/dashboard/portfolio-cuts"},
     {"key": "credit_bureau",   "label": "Credit Bureau & Sourcing", "path": "/dashboard/credit-bureau"},
 ]
 
@@ -58,6 +59,7 @@ PATH_REPORT_MAP: list[tuple[str, set]] = [
     # Exec Summary reads the bureau + OTS grand totals for its sourcing/recovery
     # band, so exec_summary must also open these (same pattern as /api/trend/).
     ("/api/ots",             {"ots", "exec_summary"}),
+    ("/api/portfolio-cuts",  {"portfolio_cuts", "exec_summary"}),
     ("/api/credit-bureau",   {"credit_bureau", "exec_summary"}),
     ("/api/pos-par",         {"pos_par"}),
     ("/api/writeoff",        {"writeoff"}),
