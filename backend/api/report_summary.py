@@ -12,6 +12,7 @@ Reads go through read_report(), so the user's data scope applies automatically.
 
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 from fastapi import APIRouter, Depends, Query
 
@@ -175,9 +176,14 @@ SPECS: dict = {
         "table": "rpt_writeoff",
         # writeoff_year is derived below from writeoff_month ('YYYY-MM') — no DDL
         # change needed, and it doubles as the post-write-off recovery vintage.
-        "dims": {**COMMON_DIMS, "product_id": ("Product", "product_id"),
-                 "writeoff_year": ("Write-off Year", "writeoff_year"),
+        "dims": {**COMMON_DIMS,
+                 # real segment (JLG / IEL / LAP), derived from product_id below
+                 "business_segment": ("Business Segment", "business_segment"),
+                 "loan_source":    ("Loan Source",    "loan_source"),
+                 "product_id":     ("Product",        "product_id"),
+                 "writeoff_year":  ("Write-off Year", "writeoff_year"),
                  "writeoff_month": ("Write-off Month", "writeoff_month")},
+        "segment_from_product": True,
         "sums": ["writeoff_count", "writeoff_amount", "sanctioned_amount",
                  "recovery_amount", "net_credit_loss"],
         "ratios": {"recovery_pct": ("recovery_amount", "writeoff_amount")},
@@ -263,6 +269,19 @@ def _summary(key: str, group_by: str, group_by_2: Optional[str],
     vcol = spec.get("variant_col")
     if vcol and vcol in df.columns:
         df = df[df[vcol].astype(str) == (variant or spec["variant_default"])]
+
+    # Some report tables carry only loan_source (IL/JLG) but do carry product_id.
+    # Derive the real business segment here rather than asking the DBA for a
+    # column: the rule is the same one the SQL layer uses (SUGAM / UDYOGINI /
+    # SECURED -> LAP), so IEL and LAP are reported exactly as elsewhere.
+    if spec.get("segment_from_product") and "product_id" in df.columns:
+        prod = df["product_id"].astype(str).str.upper().str.strip()
+        is_lap = (prod.str.contains("SUGAM", na=False)
+                  | prod.str.contains("UDYOGINI", na=False)
+                  | prod.str.contains("SECURED", na=False))
+        src = df["loan_source"].astype(str) if "loan_source" in df.columns else ""
+        df["business_segment"] = np.where(src == "JLG", "JLG",
+                                          np.where(is_lap, "LAP", "IEL"))
 
     as_of = None
     dcol = spec.get("date_col")
