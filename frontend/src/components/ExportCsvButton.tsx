@@ -1,3 +1,4 @@
+import { useState } from 'react'
 import Button from '@mui/material/Button'
 import Tooltip from '@mui/material/Tooltip'
 import DownloadIcon from '@mui/icons-material/Download'
@@ -18,25 +19,44 @@ import { useAuthStore } from '../store/authStore'
  * usage control, not a security boundary.
  */
 export function ExportCsvButton({
-  rows, filename, columns, disabled,
+  rows, filename, columns, disabled, fetchRows, label,
 }: {
   rows: Record<string, any>[]
   filename: string
   /** [key, header] pairs — controls both column order and header text. */
   columns: [string, string][]
   disabled?: boolean
+  /**
+   * Optional lazy source. When given, the rows are fetched ON CLICK instead of
+   * being held in the page. Loan-wise exports run to tens of thousands of rows;
+   * pulling that on every render would cost every export-privileged user a large
+   * download they may never ask for.
+   */
+  fetchRows?: () => Promise<Record<string, any>[]>
+  label?: string
 }) {
   const user = useAuthStore((s) => s.user)
+  const [busy, setBusy] = useState(false)
   if (!user?.can_export) return null
 
-  const download = () => {
+  const download = async () => {
+    let data = rows
+    if (fetchRows) {
+      setBusy(true)
+      try {
+        data = await fetchRows()
+      } finally {
+        setBusy(false)
+      }
+    }
+    if (!data.length) return
     const esc = (v: any) => {
       const s = v === null || v === undefined ? '' : String(v)
       // Quote when the value could break the row, and double any inner quotes.
       return /[",\n\r]/.test(s) ? `"${s.replace(/"/g, '""')}"` : s
     }
-    const head = columns.map(([, label]) => esc(label)).join(',')
-    const body = rows.map((r) => columns.map(([k]) => esc(r[k])).join(',')).join('\n')
+    const head = columns.map(([, h]) => esc(h)).join(',')
+    const body = data.map((r) => columns.map(([k]) => esc(r[k])).join(',')).join('\n')
     // BOM so Excel opens UTF-8 (₹ and Indian names) without mangling it.
     const blob = new Blob([`﻿${head}\n${body}`], { type: 'text/csv;charset=utf-8;' })
     const url = URL.createObjectURL(blob)
@@ -50,19 +70,21 @@ export function ExportCsvButton({
   }
 
   return (
-    <Tooltip title={`Download ${rows.length.toLocaleString('en-IN')} rows as CSV`}>
+    <Tooltip title={fetchRows
+      ? 'Download the current selection loan-wise as CSV'
+      : `Download ${rows.length.toLocaleString('en-IN')} rows as CSV`}>
       <span>
         <Button
           size="small"
           variant="outlined"
           startIcon={<DownloadIcon sx={{ fontSize: 16 }} />}
           onClick={download}
-          disabled={disabled || rows.length === 0}
+          disabled={disabled || busy || (!fetchRows && rows.length === 0)}
           sx={{ fontSize: '0.7rem', textTransform: 'none', borderColor: '#E2E8F0',
                 color: '#0F172A', px: 1.5,
                 '&:hover': { borderColor: '#CBD5E1', bgcolor: '#F8FAFC' } }}
         >
-          Export CSV
+          {busy ? 'Preparing…' : (label ?? 'Export CSV')}
         </Button>
       </span>
     </Tooltip>

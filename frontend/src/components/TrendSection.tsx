@@ -82,6 +82,8 @@ export function TrendSection({ title, measures, portfolio: portfolioProp, ap1, a
   const [ownPortfolio, setOwnPortfolio] = useState<'with' | 'excl'>('with')
   // The trend is the heaviest query on the page — don't load it until asked.
   const [open, setOpen] = useState(false)
+  // Chart starts hidden — the table carries the numbers, the chart is a shape aid.
+  const [showChart, setShowChart] = useState(false)
   const slicers = useSlicerParams()
 
   const controlled = portfolioProp !== undefined
@@ -214,10 +216,17 @@ export function TrendSection({ title, measures, portfolio: portfolioProp, ap1, a
               {(data?.fys ?? []).map((f) => <MenuItem key={f} value={f} sx={{ fontSize: '0.8rem' }}>{f}</MenuItem>)}
             </Select>
           </FormControl>
+          {/* The table is the report; the chart is optional and starts hidden so
+              opening a trend section costs one screen, not two. */}
+          <Button size="small" variant="outlined" onClick={() => setShowChart((v) => !v)}
+            sx={{ fontSize: '0.68rem', textTransform: 'none', py: 0.2, px: 1.2, whiteSpace: 'nowrap' }}>
+            {showChart ? 'Hide chart' : 'Show chart'}
+          </Button>
         </Box>
       </Box>
 
-      {/* Chart */}
+      {/* Chart — opt-in */}
+      {showChart && (
       <Box sx={{ height: 260 }}>
         {isLoading || !data ? (
           <Box className="flex items-center justify-center h-full" sx={{ color: '#94A3B8', fontSize: '0.8rem' }}>
@@ -247,6 +256,7 @@ export function TrendSection({ title, measures, portfolio: portfolioProp, ap1, a
           </ResponsiveContainer>
         )}
       </Box>
+      )}
 
       {/* Table */}
       {data && data.rows.length > 0 && (

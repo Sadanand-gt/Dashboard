@@ -35,7 +35,16 @@ export interface CollectionRow {
   name2?: string | null
   loan_count: number
   t1_demand_count: number
+  t1_collection_count: number
+  // loans that PAID, demand or not — pairs with the collection AMOUNT.
+  // t1_collection_count is only those that had a demand and paid against it.
+  t1_collected_count: number
+  t1_ontime: number
   mtd_demand_count: number
+  mtd_collection_count: number
+  mtd_collected_count: number
+  mtd_full_paid_count: number
+  mtd_partial_paid_count: number
   t1_demand: number
   t1_collection: number
   t1_ce: number
@@ -52,7 +61,16 @@ export interface CollectionRow {
 export interface CollectionKpis {
   loan_count: number
   t1_demand_count: number
+  t1_collection_count: number
+  // loans that PAID, demand or not — pairs with the collection AMOUNT.
+  // t1_collection_count is only those that had a demand and paid against it.
+  t1_collected_count: number
+  t1_ontime: number
   mtd_demand_count: number
+  mtd_collection_count: number
+  mtd_collected_count: number
+  mtd_full_paid_count: number
+  mtd_partial_paid_count: number
   t1_demand: number
   t1_collection: number
   t1_ce: number
@@ -68,7 +86,10 @@ export interface CollectionKpis {
   pmsd_demand: number
   pmsd_collection: number
   pmsd_ce: number
-  // PMTD = previous month to date (MTD comparison)
+  // pmtd_* = the CUMULATIVE span to the same date last month. MTD reports label
+  // this "PMSD", which is the business's name for it; pmsd_* below is the
+  // SINGLE DAY one month back and is the T-1 counterpart. Two different
+  // measures — do not collapse them because the labels overlap.
   pmtd_demand: number
   pmtd_collection: number
   pmtd_ce: number
@@ -104,11 +125,10 @@ export const BUCKET_ORDER = ['Regular', '1 - 30', '31 - 60', '61 - 90', '91 - 18
 const _BUCKET_RANK: Record<string, number> = Object.fromEntries(BUCKET_ORDER.map((b, i) => [b, i]))
 export function bucketRank(name: string): number { return _BUCKET_RANK[name] ?? 99 }
 
-export function ceColor(v: number): string {
-  if (v >= 95) return '#16A34A'
-  if (v >= 85) return '#D97706'
-  return '#DC2626'
-}
+// ceColor() removed. It hard-coded >=95% green / >=85% amber — the same
+// "target 95%" that was stripped out of the Executive Summary for being a
+// guess, still encoded silently in the cell colours. Collection efficiency is
+// now shaded against each report's own benchmark; see components/heat.ts.
 
 // ── Inline dimension select ─────────────────────────────────────────────────
 export function DimSelect({
@@ -132,11 +152,15 @@ export function DimSelect({
 }
 
 // ── Sortable table header cell ────────────────────────────────────────────────
-export function SortCell({
+/** Generic over the row's key type so pages with their own row shape (PAR 60
+ *  Collection reads loan grain and has no ftod / pmtd columns) can use it
+ *  without casting. Defaults to CollectionRow, so existing callers are
+ *  unchanged. */
+export function SortCell<K extends string = keyof CollectionRow & string>({
   label, field, active, dir, onSort, align = 'left',
 }: {
-  label: string; field: keyof CollectionRow; active: boolean
-  dir: 'asc' | 'desc'; onSort: (f: keyof CollectionRow) => void; align?: 'left' | 'right'
+  label: string; field: K; active: boolean
+  dir: 'asc' | 'desc'; onSort: (f: K) => void; align?: 'left' | 'right'
 }) {
   return (
     <TableCell align={align} sx={{ whiteSpace: 'nowrap' }}>
