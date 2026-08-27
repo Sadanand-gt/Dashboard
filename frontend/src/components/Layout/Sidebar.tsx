@@ -63,14 +63,16 @@ const NAV_ITEMS: NavItem[] = [
   { label: 'Cashless Collection', path: '/dashboard/cashless',       icon: <CreditCardIcon fontSize="small" /> },
   { label: 'Disbursement',        path: '/dashboard/disbursement',   icon: <AttachMoneyIcon fontSize="small" /> },
   { label: 'POS & PAR',           path: '/dashboard/pos-par',        icon: <TrendingUpIcon fontSize="small" /> },
-  { label: 'Delinquencies',       path: '/dashboard/delinquencies',  icon: <ReportProblemIcon fontSize="small" /> },
+  { label: 'PAR 60 Collection',  path: '/dashboard/par60-collection', icon: <ReportProblemIcon fontSize="small" /> },
   { label: 'Bucket Movement',     path: '/dashboard/bucket-movement',icon: <SwapVertIcon fontSize="small" /> },
   { label: 'Case Movement',       path: '/dashboard/case-movement',  icon: <MoveDownIcon fontSize="small" /> },
+  { label: 'Origination Funnel',  path: '/dashboard/origination-funnel', icon: <MoveDownIcon fontSize="small" /> },
   { label: 'Write-Off',           path: '/dashboard/writeoff',       icon: <WarningAmberIcon fontSize="small" /> },
   { label: 'Monthly Trend',       path: '/dashboard/trend',          icon: <ShowChartIcon fontSize="small" /> },
   { label: 'AML Risk Category',   path: '/dashboard/aml',            icon: <GppMaybeIcon fontSize="small" /> },
   { label: 'OTS & Recovery',      path: '/dashboard/ots',            icon: <HandshakeIcon fontSize="small" /> },
   { label: 'Portfolio Cuts',      path: '/dashboard/portfolio-cuts', icon: <PieChartIcon fontSize="small" /> },
+  { label: 'Vintage Curve',       path: '/dashboard/vintage',        icon: <TrendingUpIcon fontSize="small" /> },
   { label: 'Credit Bureau',       path: '/dashboard/credit-bureau',  icon: <FactCheckIcon fontSize="small" /> },
 ]
 

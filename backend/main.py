@@ -27,6 +27,9 @@ from api.trend import router as trend_router
 from api.report_summary import router as report_summary_router
 from api.writeoff import router as writeoff_router
 from api.filters import router as filters_router
+from api.origination import router as origination_router
+from api.origination_funnel import router as origination_funnel_router
+from api.vintage import router as vintage_router
 
 
 @asynccontextmanager
@@ -77,6 +80,12 @@ app.include_router(trend_router, prefix="/api", tags=["Trend"], dependencies=_ga
 app.include_router(report_summary_router, prefix="/api", tags=["Report Summary"], dependencies=_gated)
 app.include_router(writeoff_router, prefix="/api", tags=["Write-Off"], dependencies=_gated)
 app.include_router(filters_router, prefix="/api", tags=["Filters"], dependencies=_gated)
+# Origination funnel + daily BRE. These were briefly added to operations.py,
+# whose router is retired and NOT mounted, so they 404'd and the Executive
+# Summary funnel rendered zeros. They live in their own mounted router now.
+app.include_router(origination_router, prefix="/api", tags=["Origination"], dependencies=_gated)
+app.include_router(origination_funnel_router, prefix="/api", tags=["Origination"], dependencies=_gated)
+app.include_router(vintage_router, prefix="/api", tags=["Vintage"], dependencies=_gated)
 # operations router RETIRED 2026-08-07 — six raw table-dump endpoints
 # (/bucket-movement, /delinquencies, /case-movement, /aum-live, /cashless,
 # /trend-monthly) with zero frontend callers. Every page uses the /summary

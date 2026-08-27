@@ -14,7 +14,7 @@ export const PATH_REPORT_KEY: Record<string, string> = {
   '/dashboard/cashless':        'cashless',
   '/dashboard/disbursement':    'disbursement',
   '/dashboard/pos-par':         'pos_par',
-  '/dashboard/delinquencies':   'delinquencies',
+  '/dashboard/par60-collection': 'par60_collection',
   '/dashboard/bucket-movement': 'bucket_movement',
   '/dashboard/case-movement':   'case_movement',
   '/dashboard/writeoff':        'writeoff',
@@ -23,6 +23,12 @@ export const PATH_REPORT_KEY: Record<string, string> = {
   '/dashboard/ots':             'ots',
   '/dashboard/portfolio-cuts':  'portfolio_cuts',
   '/dashboard/credit-bureau':   'credit_bureau',
+  // Was missing while `vintage` sat in the backend catalog AND in
+  // PATH_REPORT_MAP. canSeePath() allows any path it does not know, so a user
+  // without `vintage` in allowed_reports was shown the page and then had every
+  // API call 403 — a broken page instead of a hidden one.
+  '/dashboard/vintage':         'vintage',
+  '/dashboard/origination-funnel': 'origination_funnel',
 }
 
 /** Can this user see the report behind a route path?
