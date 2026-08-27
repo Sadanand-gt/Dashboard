@@ -1,0 +1,149 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap">
+  <style>
+    body { margin: 0; font-family: 'Inter', system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+    a { color: #1565C0; } a:hover { color: #0D47A1; }
+    .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+  </style>
+</helmet>
+
+<div style="width: 1280px; background: #F4F6FA; padding: 40px; box-sizing: border-box; color: #1E293B">
+
+  <div style="display: flex; flex-direction: column; gap: 6px; margin-bottom: 28px">
+    <div style="font-size: 0.62rem; font-weight: 700; color: #64748B; text-transform: uppercase; letter-spacing: 0.11em">Ananya MIS · shared report component</div>
+    <div style="font-size: 1.9rem; font-weight: 800; letter-spacing: -0.02em">Conditional formatting system</div>
+    <div style="font-size: 0.92rem; color: #64748B; max-width: 760px; line-height: 1.55">Every shaded cell is measured against a stated benchmark, never a fixed cutoff. This sheet is the rule set the three layout options below all share.</div>
+  </div>
+
+  <!-- The problem -->
+  <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 20px; margin-bottom: 28px">
+
+    <div style="background: #FFFFFF; border: 1px solid rgba(0,0,0,0.07); border-radius: 16px; padding: 22px; box-shadow: 0 1px 4px rgba(0,0,0,0.06)">
+      <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 14px">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#DC2626" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+        <div style="font-size: 0.95rem; font-weight: 700; color: #B91C1C">The absolute cutoff was lying</div>
+      </div>
+      <div style="font-size: 0.84rem; color: #475569; line-height: 1.6; margin-bottom: 16px">The old rule shaded any PAR at or above 5% red. JLG runs at 17.55% and LAP at 3.60% — so it painted nearly every JLG branch red and every LAP branch green, and said nothing about either.</div>
+      <div style="display: flex; flex-direction: column; gap: 7px">
+        <div style="display: flex; align-items: center; gap: 10px">
+          <div style="width: 52px; font-size: 0.68rem; font-weight: 700; color: #64748B">JLG</div>
+          <div style="flex-grow: 1; height: 22px; background: rgba(220,38,38,0.18); border-radius: 4px; display: flex; align-items: center; padding: 0 8px"><span class="mono" style="font-size: 0.7rem; font-weight: 700; color: #7F1D1D">17.55% — every branch red</span></div>
+        </div>
+        <div style="display: flex; align-items: center; gap: 10px">
+          <div style="width: 52px; font-size: 0.68rem; font-weight: 700; color: #64748B">LAP</div>
+          <div style="flex-grow: 1; height: 22px; background: rgba(22,163,74,0.14); border-radius: 4px; display: flex; align-items: center; padding: 0 8px"><span class="mono" style="font-size: 0.7rem; font-weight: 700; color: #14532D">3.60% — every branch green</span></div>
+        </div>
+      </div>
+    </div>
+
+    <div style="background: #FFFFFF; border: 1px solid rgba(0,0,0,0.07); border-radius: 16px; padding: 22px; box-shadow: 0 1px 4px rgba(0,0,0,0.06)">
+      <div style="display: flex; align-items: center; gap: 8px; margin-bottom: 14px">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="#16A34A" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M20 6 9 17l-5-5"/></svg>
+        <div style="font-size: 0.95rem; font-weight: 700; color: #15803D">Judge each row against its own peers</div>
+      </div>
+      <div style="font-size: 0.84rem; color: #475569; line-height: 1.6; margin-bottom: 16px">The benchmark is stated on the table, and it moves with how the report is grouped:</div>
+      <div style="display: flex; flex-direction: column; gap: 10px">
+        <div style="border-left: 3px solid #1565C0; padding-left: 12px">
+          <div style="font-size: 0.74rem; font-weight: 700; color: #1E40AF">Grouped one deep</div>
+          <div style="font-size: 0.78rem; color: #64748B; line-height: 1.5">Benchmark is the <strong>Grand Total</strong> — the correctly weighted figure for the whole report.</div>
+        </div>
+        <div style="border-left: 3px solid #7C3AED; padding-left: 12px">
+          <div style="font-size: 0.74rem; font-weight: 700; color: #6D28D9">Grouped two deep</div>
+          <div style="font-size: 0.78rem; color: #64748B; line-height: 1.5">Benchmark is the <strong>median of that segment</strong>. Median, not mean — one outlier branch cannot drag the line it is judged against.</div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- The scale -->
+  <div style="background: #FFFFFF; border: 1px solid rgba(0,0,0,0.07); border-radius: 16px; padding: 24px; box-shadow: 0 1px 4px rgba(0,0,0,0.06); margin-bottom: 20px">
+    <div style="font-size: 1.05rem; font-weight: 700; margin-bottom: 4px">The five-step scale</div>
+    <div style="font-size: 0.82rem; color: #64748B; margin-bottom: 18px">Bands are ratios to the benchmark, so one scale travels across percentages, rupees and counts.</div>
+
+    <div style="display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin-bottom: 22px">
+      <sc-for list="{{bands}}" as="b" hint-placeholder-count="5">
+        <div style="border: 1px solid rgba(0,0,0,0.07); border-radius: 12px; overflow: hidden">
+          <div style="height: 54px; background: {{b.fill}}; display: flex; align-items: center; justify-content: center">
+            <span class="mono" style="font-size: 0.98rem; font-weight: {{b.weight}}; color: {{b.ink}}">{{b.sample}}</span>
+          </div>
+          <div style="padding: 10px 12px; border-top: 1px solid rgba(0,0,0,0.06)">
+            <div style="font-size: 0.68rem; font-weight: 700; color: #1E293B">{{b.ratio}}</div>
+            <div style="font-size: 0.68rem; color: #64748B; line-height: 1.4">{{b.meaning}}</div>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+
+    <div style="display: flex; gap: 24px; padding-top: 18px; border-top: 1px solid rgba(0,0,0,0.06)">
+      <div style="flex-grow: 1">
+        <div style="font-size: 0.8rem; font-weight: 700; color: #1E293B; margin-bottom: 8px">Direction is per column — the colour means good or bad, not high or low</div>
+        <div style="display: flex; gap: 10px">
+          <div style="flex-grow: 1; background: #FEF2F2; border: 1px solid #FECACA; border-radius: 10px; padding: 12px">
+            <div style="font-size: 0.66rem; font-weight: 700; color: #B91C1C; text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 5px">Higher is worse</div>
+            <div style="font-size: 0.76rem; color: #475569; line-height: 1.5">PAR 0+/30+/60+/90+, OD amount, fresh slippage, rejections, not-paid counts</div>
+          </div>
+          <div style="flex-grow: 1; background: #F0FDF4; border: 1px solid #BBF7D0; border-radius: 10px; padding: 12px">
+            <div style="font-size: 0.66rem; font-weight: 700; color: #15803D; text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 5px">Higher is better</div>
+            <div style="font-size: 0.76rem; color: #475569; line-height: 1.5">Collection efficiency, OTRR, recovery %, cashless %, regularised, sanction rate</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <!-- Rules that keep it honest -->
+  <div style="background: #FFFFFF; border: 1px solid rgba(0,0,0,0.07); border-radius: 16px; padding: 24px; box-shadow: 0 1px 4px rgba(0,0,0,0.06)">
+    <div style="font-size: 1.05rem; font-weight: 700; margin-bottom: 18px">Four rules that keep the shading meaningful</div>
+    <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px">
+      <sc-for list="{{rules}}" as="r" hint-placeholder-count="4">
+        <div style="display: flex; gap: 12px; align-items: flex-start">
+          <div style="width: 26px; height: 26px; flex-shrink: 0; border-radius: 8px; background: #EFF6FF; border: 1px solid #BFDBFE; display: flex; align-items: center; justify-content: center">
+            <span class="mono" style="font-size: 0.72rem; font-weight: 700; color: #1E40AF">{{r.n}}</span>
+          </div>
+          <div>
+            <div style="font-size: 0.82rem; font-weight: 700; color: #1E293B; margin-bottom: 3px">{{r.title}}</div>
+            <div style="font-size: 0.78rem; color: #64748B; line-height: 1.55">{{r.body}}</div>
+          </div>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{}'>
+class Component extends DCLogic {
+  renderVals() {
+    return {
+      bands: [
+        { sample: '26.3%', ratio: '≥ 1.50×',      meaning: 'Far worse than benchmark', fill: 'rgba(220,38,38,0.18)', ink: '#7F1D1D', weight: '700' },
+        { sample: '20.1%', ratio: '1.15 – 1.50×', meaning: 'Worse',                    fill: 'rgba(217,119,6,0.14)', ink: '#92400E', weight: '600' },
+        { sample: '17.6%', ratio: '0.85 – 1.15×', meaning: 'At the benchmark',         fill: 'transparent',           ink: '#1E293B', weight: '400' },
+        { sample: '11.2%', ratio: '0.50 – 0.85×', meaning: 'Better',                   fill: 'rgba(22,163,74,0.10)', ink: '#14532D', weight: '500' },
+        { sample: '4.1%',  ratio: '< 0.50×',           meaning: 'Far better',               fill: 'rgba(22,163,74,0.18)', ink: '#14532D', weight: '700' }
+      ],
+      rules: [
+        { n: '1', title: 'Only columns with a stated direction get shaded',
+          body: 'A column nobody can call good or bad — a loan count, an ID, a date — stays plain. Shading everything shades nothing.' },
+        { n: '2', title: 'A zero or missing benchmark shades nothing',
+          body: 'No ratio is invented against an empty denominator. The cell renders plain rather than falsely calm or falsely alarming.' },
+        { n: '3', title: 'The Grand Total row is never shaded',
+          body: 'It is the benchmark. Colouring it against itself would always read neutral and imply it had been assessed.' },
+        { n: '4', title: 'The benchmark is printed on the table',
+          body: 'The legend names what the colours are measured against, and it changes when AP #2 changes. Shading without a stated basis is decoration.' }
+      ]
+    };
+  }
+}
+</script>
+</body>
+</html>

@@ -1,0 +1,228 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap">
+  <style>
+    body { margin: 0; font-family: 'Inter', system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+    a { color: #1565C0; } a:hover { color: #0D47A1; }
+    .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+    .sg td { border-bottom: 1px solid rgba(0,0,0,0.05); font-size: 0.8125rem; padding: 9px 14px; color: #1E293B; }
+    .sg th { background: #EFF6FF; color: #1E40AF; font-weight: 700; font-size: 0.7rem; text-transform: uppercase;
+             letter-spacing: 0.06em; border-bottom: 2px solid #BFDBFE; padding: 9px 14px; white-space: nowrap; }
+    .sg tbody tr:hover { background: #F8FAFF !important; }
+  </style>
+</helmet>
+
+<div style="width: 1280px; background: #F4F6FA; padding: 16px; box-sizing: border-box; color: #1E293B">
+
+  <div style="display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px">
+    <div style="font-size: 0.72rem; font-weight: 800; color: #1565C0; text-transform: uppercase; letter-spacing: 0.1em">Option A · Signal-led</div>
+    <div style="font-size: 0.72rem; color: #94A3B8">built for finding the exceptions, not reading every row</div>
+  </div>
+
+  <!-- Sticky bar: same anatomy, plus a live exception count -->
+  <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap; background: #FFFFFF; border-radius: 16px;
+              padding: 7px 16px; border: 1px solid rgba(0,0,0,0.07); box-shadow: 0 2px 8px -4px rgba(15,23,42,0.28); margin-bottom: 10px">
+    <div style="font-size: 0.95rem; font-weight: 700; color: #1E293B">Delinquencies</div>
+    <div style="width: 1px; height: 22px; background: rgba(0,0,0,0.09)"></div>
+    <div>
+      <div style="font-size: 0.6rem; color: #64748B; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 2px">AP #1</div>
+      <div style="border: 1px solid rgba(0,0,0,0.18); border-radius: 6px; padding: 3px 10px; font-size: 0.75rem; background: #FFFFFF">Branch</div>
+    </div>
+    <div>
+      <div style="font-size: 0.6rem; color: #64748B; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 2px">AP #2</div>
+      <div style="border: 1px solid rgba(0,0,0,0.18); border-radius: 6px; padding: 3px 10px; font-size: 0.75rem; background: #FFFFFF">Business Segment</div>
+    </div>
+    <div style="width: 1px; height: 22px; background: rgba(0,0,0,0.09)"></div>
+    <div>
+      <div style="font-size: 0.6rem; color: #64748B; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 2px">Portfolio</div>
+      <div style="display: flex; height: 26px; border-radius: 6px; overflow: hidden; border: 1px solid rgba(0,0,0,0.18)">
+        <div style="padding: 0 10px; display: flex; align-items: center; font-size: 0.7rem; color: #64748B">With W/O</div>
+        <div style="padding: 0 10px; display: flex; align-items: center; font-size: 0.7rem; background: rgba(21,101,192,0.12); color: #1565C0; font-weight: 600">Excl W/O</div>
+      </div>
+    </div>
+    <div style="flex-grow: 1"></div>
+    <div style="display: flex; align-items: center; gap: 6px; background: #FEF2F2; border: 1px solid #FECACA; border-radius: 20px; padding: 4px 12px">
+      <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="#B91C1C" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="M10.29 3.86 1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86a2 2 0 0 0-3.42 0Z"/><path d="M12 9v4"/><path d="M12 17h.01"/></svg>
+      <span style="font-size: 0.7rem; font-weight: 700; color: #B91C1C">4 branches need attention</span>
+    </div>
+    <div style="border: 1px solid rgba(0,0,0,0.18); border-radius: 6px; padding: 4px 12px; font-size: 0.7rem; font-weight: 600; color: #1565C0">Export CSV</div>
+    <div style="text-align: right">
+      <div style="font-size: 0.58rem; color: #94A3B8; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em">As of</div>
+      <div style="font-size: 0.8rem; font-weight: 700; color: #1E293B">21 Aug 2026</div>
+    </div>
+  </div>
+
+  <!-- KPI cards that actually compare -->
+  <div style="display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin-bottom: 10px">
+    <sc-for list="{{kpis}}" as="k" hint-placeholder-count="5">
+      <div style="background: {{k.bg}}; border: 1.5px solid {{k.border}}; border-radius: 14px; padding: 14px 14px 12px 16px; position: relative; overflow: hidden">
+        <div style="position: absolute; left: 0; top: 0; bottom: 0; width: 4px; background: {{k.accent}}"></div>
+        <div style="font-size: 0.62rem; font-weight: 700; color: {{k.label}}; text-transform: uppercase; letter-spacing: 0.07em">{{k.title}}</div>
+        <div class="mono" style="font-size: 1.4rem; font-weight: 700; color: {{k.accent}}; line-height: 1.2; margin-top: 4px">{{k.value}}</div>
+        <div style="display: flex; align-items: center; gap: 5px; margin-top: 5px">
+          <span style="font-size: 0.66rem; font-weight: 700; color: {{k.deltaInk}}">{{k.delta}}</span>
+          <span style="font-size: 0.66rem; color: #64748B">{{k.basis}}</span>
+        </div>
+        <!-- 12-month shape, drawn not decorated -->
+        <div style="display: flex; align-items: flex-end; gap: 2px; height: 22px; margin-top: 8px">
+          <sc-for list="{{k.spark}}" as="s" hint-placeholder-count="12">
+            <div style="flex-grow: 1; height: {{s}}%; background: {{k.accent}}; opacity: 0.28; border-radius: 1px"></div>
+          </sc-for>
+        </div>
+      </div>
+    </sc-for>
+  </div>
+
+  <!-- Table -->
+  <div style="background: #FFFFFF; border: 1px solid rgba(0,0,0,0.07); border-radius: 16px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,0.06)">
+    <div style="padding: 11px 16px; border-bottom: 1px solid rgba(0,0,0,0.06); display: flex; align-items: center; gap: 14px; flex-wrap: wrap">
+      <div style="font-size: 0.85rem; font-weight: 700; color: #1E293B">Branch × Business Segment</div>
+      <div style="display: flex; align-items: center; gap: 7px; background: #F8FAFF; border: 1px solid #E2E8F0; border-radius: 20px; padding: 3px 11px">
+        <span style="font-size: 0.63rem; color: #64748B">Shaded against</span>
+        <span style="font-size: 0.63rem; font-weight: 700; color: #1E40AF">JLG median · 13.66%</span>
+      </div>
+      <div style="flex-grow: 1"></div>
+      <div style="display: flex; align-items: center; gap: 5px">
+        <span style="font-size: 0.62rem; color: #94A3B8">better</span>
+        <span style="width: 22px; height: 11px; border-radius: 2px; background: rgba(22,163,74,0.18)"></span>
+        <span style="width: 22px; height: 11px; border-radius: 2px; background: rgba(22,163,74,0.10)"></span>
+        <span style="width: 22px; height: 11px; border-radius: 2px; background: #F1F5F9"></span>
+        <span style="width: 22px; height: 11px; border-radius: 2px; background: rgba(217,119,6,0.14)"></span>
+        <span style="width: 22px; height: 11px; border-radius: 2px; background: rgba(220,38,38,0.18)"></span>
+        <span style="font-size: 0.62rem; color: #94A3B8">worse</span>
+      </div>
+    </div>
+
+    <table class="sg" style="width: 100%; border-collapse: collapse">
+      <thead>
+        <tr>
+          <th style="text-align: left; padding-left: 8px">Branch</th>
+          <th style="text-align: left">Segment</th>
+          <th style="text-align: right">POS</th>
+          <th style="text-align: right"># Loans</th>
+          <th style="text-align: right">PAR 0+</th>
+          <th style="text-align: right; background: #DBEAFE">PAR 30+</th>
+          <th style="text-align: right">PAR 60+</th>
+          <th style="text-align: right">PAR 90+</th>
+        </tr>
+      </thead>
+      <tbody>
+        <sc-for list="{{rows}}" as="r" hint-placeholder-count="9">
+          <tr style="background: {{r.zebra}}">
+            <!-- severity spine: the row is findable before any number is read -->
+            <td style="font-weight: 600; white-space: nowrap; border-left: 4px solid {{r.spine}}; padding-left: 10px">{{r.branch}}</td>
+            <td style="color: #475569">{{r.seg}}</td>
+            <!-- magnitude as a bar, never as colour: size is not a risk signal -->
+            <td style="text-align: right; padding-right: 14px">
+              <div style="display: flex; align-items: center; gap: 8px; justify-content: flex-end">
+                <div style="width: 46px; height: 5px; background: #E2E8F0; border-radius: 3px; overflow: hidden">
+                  <div style="width: {{r.posPct}}%; height: 100%; background: #94A3B8; border-radius: 3px"></div>
+                </div>
+                <span class="mono" style="font-size: 0.74rem; min-width: 58px; display: inline-block">{{r.pos}}</span>
+              </div>
+            </td>
+            <td class="mono" style="text-align: right; font-size: 0.74rem; color: #475569">{{r.loans}}</td>
+            <td class="mono" style="text-align: right; font-size: 0.74rem; color: #64748B">{{r.par0}}</td>
+            <!-- one decision column carries the fill; the rest stay legible -->
+            <td class="mono" style="text-align: right; font-size: 0.78rem; background: {{r.h30}}; color: {{r.i30}}; font-weight: {{r.w30}}">{{r.par30}}</td>
+            <td class="mono" style="text-align: right; font-size: 0.74rem; color: #64748B">{{r.par60}}</td>
+            <td class="mono" style="text-align: right; font-size: 0.74rem; color: {{r.i90}}; font-weight: {{r.w90}}">{{r.par90}}</td>
+          </tr>
+        </sc-for>
+        <tr style="background: #F8FAFF">
+          <td style="font-weight: 800; border-top: 2px solid rgba(0,0,0,0.15); border-left: 4px solid transparent; padding-left: 10px">Grand Total</td>
+          <td style="border-top: 2px solid rgba(0,0,0,0.15)"></td>
+          <td class="mono" style="text-align: right; font-weight: 800; border-top: 2px solid rgba(0,0,0,0.15); font-size: 0.74rem">₹418.50 Cr</td>
+          <td class="mono" style="text-align: right; font-weight: 800; border-top: 2px solid rgba(0,0,0,0.15); font-size: 0.74rem">123,345</td>
+          <td class="mono" style="text-align: right; font-weight: 800; border-top: 2px solid rgba(0,0,0,0.15); font-size: 0.74rem">18.24%</td>
+          <td class="mono" style="text-align: right; font-weight: 800; border-top: 2px solid rgba(0,0,0,0.15); font-size: 0.78rem">17.25%</td>
+          <td class="mono" style="text-align: right; font-weight: 800; border-top: 2px solid rgba(0,0,0,0.15); font-size: 0.74rem">17.08%</td>
+          <td class="mono" style="text-align: right; font-weight: 800; border-top: 2px solid rgba(0,0,0,0.15); font-size: 0.74rem">16.92%</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div style="margin-top: 14px; display: flex; gap: 26px">
+    <div style="flex-grow: 1">
+      <div style="font-size: 0.72rem; font-weight: 700; color: #16A34A; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 5px">What this buys</div>
+      <div style="font-size: 0.8rem; color: #64748B; line-height: 1.6">The left spine makes an exception row findable without reading a single number. KPI tiles carry their comparison and 12-month shape, so a figure means something on its own. Magnitude moves to a grey bar, freeing colour to mean risk and only risk.</div>
+    </div>
+    <div style="flex-grow: 1">
+      <div style="font-size: 0.72rem; font-weight: 700; color: #D97706; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 5px">The trade-off</div>
+      <div style="font-size: 0.8rem; color: #64748B; line-height: 1.6">Only PAR 30+ is filled, so someone hunting on PAR 90+ loses the heat they had. Sparklines need a 12-month series per KPI — that is a second call on some pages. Rows are taller, so fewer fit on screen.</div>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{}'>
+class Component extends DCLogic {
+  renderVals() {
+    const M = 13.66;                       // JLG segment median PAR 30+
+    const band = (v) => {
+      const r = v / M;
+      if (r >= 1.50) return 4; if (r >= 1.15) return 3;
+      if (r >= 0.85) return 2; if (r >= 0.50) return 1; return 0;
+    };
+    const FILL = ['rgba(22,163,74,0.18)', 'rgba(22,163,74,0.10)', 'transparent', 'rgba(217,119,6,0.14)', 'rgba(220,38,38,0.18)'];
+    const INK  = ['#14532D', '#14532D', '#1E293B', '#92400E', '#7F1D1D'];
+    const WT   = ['700', '500', '400', '600', '700'];
+    const SPINE = ['#16A34A', '#86EFAC', 'transparent', '#FBBF24', '#DC2626'];
+    const src = [
+      ['SURENDRA_NAGAR', '₹9.84 Cr', 98410256, '2,534', 11.79, 10.84, 10.74, 10.67],
+      ['CS_AZAD_NAGAR',  '₹8.45 Cr', 84540401, '2,069',  6.43,  5.33,  5.26,  5.24],
+      ['DAHOD_1',        '₹8.09 Cr', 80856618, '1,784',  4.08,  3.98,  3.96,  3.96],
+      ['BANSWARA',       '₹7.19 Cr', 71913806, '2,122', 14.46, 13.66, 13.52, 13.40],
+      ['PETLAWAD',       '₹6.63 Cr', 66299387, '1,588',  6.55,  6.32,  6.30,  6.30],
+      ['KUKSHI',         '₹6.25 Cr', 62479987, '1,888', 16.86, 15.90, 15.83, 15.70],
+      ['ALIRAJPUR',      '₹6.02 Cr', 60212194, '1,630', 13.72, 12.68, 12.48, 12.35],
+      ['JHABUA',         '₹5.83 Cr', 58273324, '1,748', 16.06, 15.58, 15.42, 15.42],
+      ['RAJGARH',        '₹5.60 Cr', 56028980, '1,547', 15.89, 15.49, 15.34, 15.26]
+    ];
+    const maxPos = 98410256;
+    return {
+      kpis: [
+        { title: 'Total POS', value: '₹418.50 Cr', delta: '▲ 2.4%', basis: 'vs Jul-26', accent: '#1565C0',
+          bg: '#EFF6FF', border: '#BFDBFE', label: '#1E40AF', deltaInk: '#16A34A',
+          spark: [52, 55, 58, 61, 60, 64, 68, 71, 74, 78, 84, 100] },
+        { title: '# Loans', value: '123,345', delta: '▲ 1.1%', basis: 'vs Jul-26', accent: '#1565C0',
+          bg: '#EFF6FF', border: '#BFDBFE', label: '#1E40AF', deltaInk: '#16A34A',
+          spark: [61, 63, 66, 69, 72, 74, 77, 80, 84, 88, 94, 100] },
+        { title: 'PAR 0+', value: '18.24%', delta: '▲ 0.31 pp', basis: 'vs Jul-26', accent: '#D97706',
+          bg: '#FFFBEB', border: '#FDE68A', label: '#B45309', deltaInk: '#DC2626',
+          spark: [44, 47, 51, 55, 58, 62, 66, 71, 78, 84, 92, 100] },
+        { title: 'PAR 30+', value: '17.25%', delta: '▲ 0.28 pp', basis: 'vs Jul-26', accent: '#DC2626',
+          bg: '#FEF2F2', border: '#FECACA', label: '#B91C1C', deltaInk: '#DC2626',
+          spark: [42, 45, 49, 53, 57, 61, 65, 70, 77, 83, 91, 100] },
+        { title: 'PAR 90+', value: '16.92%', delta: '▲ 0.24 pp', basis: 'vs Jul-26', accent: '#DC2626',
+          bg: '#FEF2F2', border: '#FECACA', label: '#B91C1C', deltaInk: '#DC2626',
+          spark: [40, 43, 47, 51, 55, 60, 64, 69, 76, 82, 90, 100] }
+      ],
+      rows: src.map((s, i) => {
+        const b30 = band(s[5]), b90 = band(s[7]);
+        return {
+          branch: s[0], seg: 'JLG', pos: s[1], loans: s[3],
+          posPct: Math.round(s[2] / maxPos * 100),
+          par0: s[4].toFixed(2) + '%', par30: s[5].toFixed(2) + '%',
+          par60: s[6].toFixed(2) + '%', par90: s[7].toFixed(2) + '%',
+          h30: FILL[b30], i30: INK[b30], w30: WT[b30],
+          i90: INK[b90], w90: b90 >= 3 ? '700' : '400',
+          spine: SPINE[b30],
+          zebra: i % 2 ? '#FCFDFF' : '#FFFFFF'
+        };
+      })
+    };
+  }
+}
+</script>
+</body>
+</html>

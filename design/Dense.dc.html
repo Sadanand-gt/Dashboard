@@ -1,0 +1,210 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap">
+  <style>
+    body { margin: 0; font-family: 'Inter', system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+    a { color: #1565C0; } a:hover { color: #0D47A1; }
+    .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+    .dn th { background: #EFF6FF; color: #1E40AF; font-weight: 700; font-size: 0.66rem; text-transform: uppercase;
+             letter-spacing: 0.05em; border-bottom: 2px solid #BFDBFE; white-space: nowrap; }
+    .dn tbody tr:hover { background: #F8FAFF !important; }
+  </style>
+</helmet>
+
+<div style="width: 1280px; background: #F4F6FA; padding: 16px; box-sizing: border-box; color: #1E293B">
+
+  <div style="display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px">
+    <div style="font-size: 0.72rem; font-weight: 800; color: #0F766E; text-transform: uppercase; letter-spacing: 0.1em">Option B · Dense data-first</div>
+    <div style="font-size: 0.72rem; color: #94A3B8">every pixel of height goes to rows</div>
+  </div>
+
+  <!-- One bar carries parameters AND the totals: the KPI band is gone -->
+  <div style="background: #FFFFFF; border-radius: 16px; border: 1px solid rgba(0,0,0,0.07);
+              box-shadow: 0 2px 8px -4px rgba(15,23,42,0.28); margin-bottom: 8px; overflow: hidden">
+    <div style="display: flex; align-items: center; gap: 14px; flex-wrap: wrap; padding: 7px 16px">
+      <div style="font-size: 0.95rem; font-weight: 700; color: #1E293B">Delinquencies</div>
+      <div style="width: 1px; height: 22px; background: rgba(0,0,0,0.09)"></div>
+      <div>
+        <div style="font-size: 0.6rem; color: #64748B; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 2px">AP #1</div>
+        <div style="border: 1px solid rgba(0,0,0,0.18); border-radius: 6px; padding: 3px 10px; font-size: 0.75rem">Branch</div>
+      </div>
+      <div>
+        <div style="font-size: 0.6rem; color: #64748B; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 2px">AP #2</div>
+        <div style="border: 1px solid rgba(0,0,0,0.18); border-radius: 6px; padding: 3px 10px; font-size: 0.75rem">Business Segment</div>
+      </div>
+      <div>
+        <div style="font-size: 0.6rem; color: #64748B; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 2px">Portfolio</div>
+        <div style="display: flex; height: 26px; border-radius: 6px; overflow: hidden; border: 1px solid rgba(0,0,0,0.18)">
+          <div style="padding: 0 10px; display: flex; align-items: center; font-size: 0.7rem; color: #64748B">With W/O</div>
+          <div style="padding: 0 10px; display: flex; align-items: center; font-size: 0.7rem; background: rgba(21,101,192,0.12); color: #1565C0; font-weight: 600">Excl W/O</div>
+        </div>
+      </div>
+      <div style="flex-grow: 1"></div>
+      <!-- chart demoted to an icon: it was costing a full row to say nothing -->
+      <div style="width: 28px; height: 26px; border: 1px solid rgba(0,0,0,0.18); border-radius: 6px; display: flex; align-items: center; justify-content: center">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#64748B" stroke-width="2" stroke-linecap="round"><path d="M3 3v18h18"/><path d="M7 15v3"/><path d="M12 9v9"/><path d="M17 5v13"/></svg>
+      </div>
+      <div style="width: 28px; height: 26px; border: 1px solid rgba(0,0,0,0.18); border-radius: 6px; display: flex; align-items: center; justify-content: center">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="#1565C0" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></svg>
+      </div>
+      <div style="text-align: right">
+        <div style="font-size: 0.58rem; color: #94A3B8; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em">As of</div>
+        <div style="font-size: 0.8rem; font-weight: 700; color: #1E293B">21 Aug 2026</div>
+      </div>
+    </div>
+    <!-- totals rail: same five numbers, one strip instead of five cards -->
+    <div style="display: flex; border-top: 1px solid rgba(0,0,0,0.07); background: #FBFCFE">
+      <sc-for list="{{kpis}}" as="k" hint-placeholder-count="5">
+        <div style="flex-grow: 1; padding: 7px 16px; border-right: 1px solid rgba(0,0,0,0.05); display: flex; align-items: baseline; gap: 8px">
+          <span style="font-size: 0.6rem; font-weight: 700; color: #64748B; text-transform: uppercase; letter-spacing: 0.07em">{{k.title}}</span>
+          <span class="mono" style="font-size: 0.95rem; font-weight: 700; color: {{k.accent}}">{{k.value}}</span>
+          <span style="font-size: 0.62rem; font-weight: 700; color: {{k.deltaInk}}">{{k.delta}}</span>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+
+  <!-- Table takes everything that is left -->
+  <div style="background: #FFFFFF; border: 1px solid rgba(0,0,0,0.07); border-radius: 16px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,0.06)">
+    <div style="padding: 8px 16px; border-bottom: 1px solid rgba(0,0,0,0.06); display: flex; align-items: center; gap: 12px; flex-wrap: wrap">
+      <div style="font-size: 0.8rem; font-weight: 700; color: #1E293B">Branch × Business Segment</div>
+      <div style="font-size: 0.63rem; color: #64748B">shaded against <strong style="color: #1E40AF">JLG median · 18.56%</strong></div>
+      <div style="flex-grow: 1"></div>
+      <div style="font-size: 0.63rem; color: #94A3B8">18 of 164 branches</div>
+      <div style="display: flex; align-items: center; gap: 4px">
+        <span style="width: 20px; height: 10px; border-radius: 2px; background: rgba(22,163,74,0.18)"></span>
+        <span style="width: 20px; height: 10px; border-radius: 2px; background: rgba(22,163,74,0.10)"></span>
+        <span style="width: 20px; height: 10px; border-radius: 2px; background: #F1F5F9"></span>
+        <span style="width: 20px; height: 10px; border-radius: 2px; background: rgba(217,119,6,0.14)"></span>
+        <span style="width: 20px; height: 10px; border-radius: 2px; background: rgba(220,38,38,0.18)"></span>
+      </div>
+    </div>
+
+    <table class="dn" style="width: 100%; border-collapse: collapse">
+      <thead>
+        <!-- grouped headers: the eye finds the PAR block as one object -->
+        <tr>
+          <th colspan="2" style="text-align: left; padding: 5px 14px; background: #F8FAFF; border-bottom: 1px solid #E2E8F0; color: #64748B; letter-spacing: 0.08em">Grouping</th>
+          <th colspan="2" style="text-align: center; padding: 5px 14px; background: #F8FAFF; border-bottom: 1px solid #E2E8F0; color: #64748B; letter-spacing: 0.08em">Portfolio</th>
+          <th colspan="4" style="text-align: center; padding: 5px 14px; background: #FFF7ED; border-bottom: 1px solid #FED7AA; color: #B45309; letter-spacing: 0.08em">Portfolio at risk</th>
+        </tr>
+        <tr>
+          <th style="text-align: left; padding: 6px 14px">Branch</th>
+          <th style="text-align: left; padding: 6px 14px">Segment</th>
+          <th style="text-align: right; padding: 6px 14px">POS</th>
+          <th style="text-align: right; padding: 6px 14px">#&nbsp;Loans</th>
+          <th style="text-align: right; padding: 6px 14px">0+</th>
+          <th style="text-align: right; padding: 6px 14px">30+</th>
+          <th style="text-align: right; padding: 6px 14px">60+</th>
+          <th style="text-align: right; padding: 6px 14px">90+</th>
+        </tr>
+      </thead>
+      <tbody>
+        <sc-for list="{{rows}}" as="r" hint-placeholder-count="18">
+          <tr style="background: {{r.zebra}}">
+            <td style="font-weight: 600; white-space: nowrap; font-size: 0.75rem; padding: 4px 14px; border-bottom: 1px solid rgba(0,0,0,0.05); border-left: 3px solid {{r.spine}}">{{r.branch}}</td>
+            <td style="color: #475569; font-size: 0.72rem; padding: 4px 14px; border-bottom: 1px solid rgba(0,0,0,0.05)">{{r.seg}}</td>
+            <td class="mono" style="text-align: right; font-size: 0.72rem; padding: 4px 14px; border-bottom: 1px solid rgba(0,0,0,0.05)">{{r.pos}}</td>
+            <td class="mono" style="text-align: right; font-size: 0.72rem; color: #475569; padding: 4px 14px; border-bottom: 1px solid rgba(0,0,0,0.05)">{{r.loans}}</td>
+            <td class="mono" style="text-align: right; font-size: 0.72rem; padding: 4px 14px; border-bottom: 1px solid rgba(0,0,0,0.05); background: {{r.h0}}; color: {{r.i0}}; font-weight: {{r.w0}}">{{r.par0}}</td>
+            <td class="mono" style="text-align: right; font-size: 0.72rem; padding: 4px 14px; border-bottom: 1px solid rgba(0,0,0,0.05); background: {{r.h30}}; color: {{r.i30}}; font-weight: {{r.w30}}">{{r.par30}}</td>
+            <td class="mono" style="text-align: right; font-size: 0.72rem; padding: 4px 14px; border-bottom: 1px solid rgba(0,0,0,0.05); background: {{r.h60}}; color: {{r.i60}}; font-weight: {{r.w60}}">{{r.par60}}</td>
+            <td class="mono" style="text-align: right; font-size: 0.72rem; padding: 4px 14px; border-bottom: 1px solid rgba(0,0,0,0.05); background: {{r.h90}}; color: {{r.i90}}; font-weight: {{r.w90}}">{{r.par90}}</td>
+          </tr>
+        </sc-for>
+        <tr style="background: #F8FAFF">
+          <td style="font-weight: 800; font-size: 0.75rem; padding: 6px 14px; border-top: 2px solid rgba(0,0,0,0.15); border-left: 3px solid transparent">Grand Total</td>
+          <td style="border-top: 2px solid rgba(0,0,0,0.15)"></td>
+          <td class="mono" style="text-align: right; font-weight: 800; font-size: 0.72rem; padding: 6px 14px; border-top: 2px solid rgba(0,0,0,0.15)">₹418.50 Cr</td>
+          <td class="mono" style="text-align: right; font-weight: 800; font-size: 0.72rem; padding: 6px 14px; border-top: 2px solid rgba(0,0,0,0.15)">123,345</td>
+          <td class="mono" style="text-align: right; font-weight: 800; font-size: 0.72rem; padding: 6px 14px; border-top: 2px solid rgba(0,0,0,0.15)">18.24%</td>
+          <td class="mono" style="text-align: right; font-weight: 800; font-size: 0.72rem; padding: 6px 14px; border-top: 2px solid rgba(0,0,0,0.15)">17.25%</td>
+          <td class="mono" style="text-align: right; font-weight: 800; font-size: 0.72rem; padding: 6px 14px; border-top: 2px solid rgba(0,0,0,0.15)">17.08%</td>
+          <td class="mono" style="text-align: right; font-weight: 800; font-size: 0.72rem; padding: 6px 14px; border-top: 2px solid rgba(0,0,0,0.15)">16.92%</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div style="margin-top: 14px; display: flex; gap: 26px">
+    <div style="flex-grow: 1">
+      <div style="font-size: 0.72rem; font-weight: 700; color: #16A34A; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 5px">What this buys</div>
+      <div style="font-size: 0.8rem; color: #64748B; line-height: 1.6">Roughly twice the rows per screen: the KPI band folds into the parameter bar and the chart panel becomes an icon. Grouped headers let the eye take "portfolio at risk" as one block. All four PAR columns keep their shading, so any of them can be the one you are hunting on.</div>
+    </div>
+    <div style="flex-grow: 1">
+      <div style="font-size: 0.72rem; font-weight: 700; color: #D97706; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 5px">The trade-off</div>
+      <div style="font-size: 0.8rem; color: #64748B; line-height: 1.6">Four shaded columns next to each other is a lot of colour, and near-identical PAR values make wide bands of it. The totals rail is less glanceable than cards. At 0.72rem this is a desk report, not something to read on a laptop across a meeting table.</div>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{}'>
+class Component extends DCLogic {
+  renderVals() {
+    const M = 18.56;                       // JLG median PAR 30+ across all branches
+    const band = (v) => {
+      const r = v / M;
+      if (r >= 1.50) return 4; if (r >= 1.15) return 3;
+      if (r >= 0.85) return 2; if (r >= 0.50) return 1; return 0;
+    };
+    const FILL = ['rgba(22,163,74,0.18)', 'rgba(22,163,74,0.10)', 'transparent', 'rgba(217,119,6,0.14)', 'rgba(220,38,38,0.18)'];
+    const INK  = ['#14532D', '#14532D', '#1E293B', '#92400E', '#7F1D1D'];
+    const WT   = ['700', '500', '400', '600', '700'];
+    const SPINE = ['#16A34A', '#86EFAC', 'transparent', '#FBBF24', '#DC2626'];
+    const src = [
+      ['SURENDRA_NAGAR', '₹9.84 Cr', '2,534', 11.79, 10.84, 10.74, 10.67],
+      ['CS_AZAD_NAGAR',  '₹8.45 Cr', '2,069',  6.43,  5.33,  5.26,  5.24],
+      ['DAHOD_1',        '₹8.09 Cr', '1,784',  4.08,  3.98,  3.96,  3.96],
+      ['BANSWARA',       '₹7.19 Cr', '2,122', 14.46, 13.66, 13.52, 13.40],
+      ['PETLAWAD',       '₹6.63 Cr', '1,588',  6.55,  6.32,  6.30,  6.30],
+      ['KUKSHI',         '₹6.25 Cr', '1,888', 16.86, 15.90, 15.83, 15.70],
+      ['ALIRAJPUR',      '₹6.02 Cr', '1,630', 13.72, 12.68, 12.48, 12.35],
+      ['JHABUA',         '₹5.83 Cr', '1,748', 16.06, 15.58, 15.42, 15.42],
+      ['RAJGARH',        '₹5.60 Cr', '1,547', 15.89, 15.49, 15.34, 15.26],
+      ['DALSINGHSARAI',  '₹5.59 Cr', '1,605',  0.51,  0.23,  0.19,  0.06],
+      ['GANGARDI',       '₹5.45 Cr', '1,213',  4.41,  4.09,  3.92,  3.92],
+      ['DAHOD_2',        '₹5.38 Cr', '1,507',  8.41,  8.17,  8.05,  8.05],
+      ['JHALOD',         '₹5.35 Cr', '1,746', 27.54, 26.89, 26.89, 26.79],
+      ['SABLA',          '₹5.33 Cr', '1,316', 12.93, 12.67, 12.57, 12.55],
+      ['LIMKHEDA',       '₹5.12 Cr', '1,512', 18.35, 18.13, 18.12, 18.12],
+      ['BARMER',         '₹5.07 Cr', '1,675', 21.04, 19.96, 19.80, 19.80],
+      ['DUNGARA',        '₹4.92 Cr', '1,629', 27.53, 26.90, 26.86, 26.75],
+      ['MUZAFFARPUR',    '₹4.88 Cr', '1,616',  1.45,  1.00,  0.93,  0.84]
+    ];
+    return {
+      kpis: [
+        { title: 'Total POS', value: '₹418.50 Cr', delta: '▲ 2.4%',    accent: '#1565C0', deltaInk: '#16A34A' },
+        { title: '# Loans',   value: '123,345',    delta: '▲ 1.1%',    accent: '#1565C0', deltaInk: '#16A34A' },
+        { title: 'PAR 0+',    value: '18.24%',     delta: '▲ 0.31 pp', accent: '#D97706', deltaInk: '#DC2626' },
+        { title: 'PAR 30+',   value: '17.25%',     delta: '▲ 0.28 pp', accent: '#DC2626', deltaInk: '#DC2626' },
+        { title: 'PAR 90+',   value: '16.92%',     delta: '▲ 0.24 pp', accent: '#DC2626', deltaInk: '#DC2626' }
+      ],
+      rows: src.map((s, i) => {
+        const b0 = band(s[3]), b30 = band(s[4]), b60 = band(s[5]), b90 = band(s[6]);
+        return {
+          branch: s[0], seg: 'JLG', pos: s[1], loans: s[2],
+          par0: s[3].toFixed(2) + '%', par30: s[4].toFixed(2) + '%',
+          par60: s[5].toFixed(2) + '%', par90: s[6].toFixed(2) + '%',
+          h0: FILL[b0], i0: INK[b0], w0: WT[b0],
+          h30: FILL[b30], i30: INK[b30], w30: WT[b30],
+          h60: FILL[b60], i60: INK[b60], w60: WT[b60],
+          h90: FILL[b90], i90: INK[b90], w90: WT[b90],
+          spine: SPINE[b30],
+          zebra: i % 2 ? '#FCFDFF' : '#FFFFFF'
+        };
+      })
+    };
+  }
+}
+</script>
+</body>
+</html>
