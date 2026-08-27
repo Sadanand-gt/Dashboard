@@ -75,3 +75,6 @@ pipeline/queries/_tmp_*.sql
 # ── OS cruft ──────────────────────────────────────────────
 .DS_Store
 Thumbs.db
+
+# Pipeline verification scratch — regenerated on demand, never a source of truth
+pipeline/_verify_*.parquet

@@ -1,0 +1,50 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# ananya-pipeline.service — one daily run of the MIS pipeline.
+#
+# Started by ananya-pipeline.timer; Type=oneshot, so it runs and exits.
+#
+# WHY A SERVER AND NOT THE LAPTOP
+#   The Windows Task Scheduler job on AFIG-LPT-000127 could never work
+#   unattended: its principal is LogonType=Interactive (no logged-in session,
+#   no run), WakeToRun is false (asleep at 06:30 = no run), and with
+#   StartWhenAvailable it fired whenever the lid next opened — 10:02, 09:47,
+#   21:38 on the days it ran at all. Task history logging was also off, so
+#   none of that was visible.
+#
+#   Running in AWS next to the RDS instances should also settle the failures
+#   that made the last run exit 1: aum_status, aum_loans, collection_loans,
+#   trend_monthly and trend_full all died with "SSL connection has been closed
+#   unexpectedly" — the signature of a long scan over a home Wi-Fi link to
+#   ap-south RDS, not of a query defect.
+# ─────────────────────────────────────────────────────────────────────────────
+[Unit]
+Description=Ananya MIS daily pipeline
+# The whole job is database work; starting before the network is up just burns
+# an attempt.
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+User=ananya
+Group=ananya
+WorkingDirectory=/opt/ananya_mis
+
+# Credentials live in the .env the repo already reads — NOT in this unit, which
+# is world-readable under /etc/systemd. Ship .env separately, chmod 600, owned
+# by the service user.
+EnvironmentFile=/opt/ananya_mis/.env
+
+ExecStart=/opt/ananya_mis/.venv/bin/python -m pipeline.daily_run
+
+# daily_run exits non-zero if ANY report fails, so a partial night is visibly
+# failed rather than silently green — same contract the .bat had.
+StandardOutput=append:/var/log/ananya_mis/pipeline.log
+StandardError=append:/var/log/ananya_mis/pipeline.log
+
+# The full-trend rebuild is heavy. Generous but bounded: a hung run must not sit
+# on the next day's slot.
+TimeoutStartSec=6h
+
+[Install]
+WantedBy=multi-user.target
