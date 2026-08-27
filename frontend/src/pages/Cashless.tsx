@@ -6,7 +6,7 @@ export function Cashless() {
       title="Cashless Collection"
       endpoint="cashless"
       portfolio
-      note="Cashless = collections with pay mode 'CL' (digital/bank) · IL only, per PBI · With / Excl write-off toggle"
+      note="Cashless = pay mode 'CL' (digital / bank) · IL only"
       kpis={[
         { field: 'mtd_collection',     label: 'MTD Collection', fmt: 'inr' },
         { field: 'mtd_cashless',       label: 'MTD Cashless',   fmt: 'inr', variant: 'green' },
@@ -20,10 +20,12 @@ export function Cashless() {
       columns={[
         { field: 'daily_collection',   label: 'T-1 Collection', fmt: 'inr' },
         { field: 'daily_cashless',     label: 'T-1 Cashless',   fmt: 'inr' },
-        { field: 'daily_cashless_pct', label: 'T-1 Cashless %', fmt: 'pct' },
+        { field: 'daily_cashless_pct', label: 'T-1 Cashless %', fmt: 'pct', heat: 'good-high',
+          base: { field: 'daily_collection' } },
         { field: 'mtd_collection',     label: 'MTD Collection', fmt: 'inr' },
         { field: 'mtd_cashless',       label: 'MTD Cashless',   fmt: 'inr' },
-        { field: 'mtd_cashless_pct',   label: 'MTD Cashless %', fmt: 'pct' },
+        { field: 'mtd_cashless_pct',   label: 'MTD Cashless %', fmt: 'pct', heat: 'good-high',
+          base: { field: 'mtd_collection' } },
       ]}
     />
   )

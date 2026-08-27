@@ -39,7 +39,7 @@ function cellTint(prevIdx: number, currIdx: number, v: number): string {
 
 export function BucketMovement() {
   const [metric, setMetric] = useState<Metric>('pos')
-  const [includeWO, setIncludeWO] = useState(true)
+  const [includeWO, setIncludeWO] = useState(false)  // default Excl. W/O — the active portfolio, consistent across every page
 
   const slicer = useSlicerParams()
   const params = useMemo(() => ({

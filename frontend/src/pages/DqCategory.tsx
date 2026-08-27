@@ -14,6 +14,7 @@ import ToggleButton from '@mui/material/ToggleButton'
 import ToggleButtonGroup from '@mui/material/ToggleButtonGroup'
 import Tooltip from '@mui/material/Tooltip'
 import { api } from '../api/client'
+import { heatBand, heatStyle, spineColor, makeBenchFor, BAND_INK } from '../components/heat'
 import { KpiCard } from '../components/KpiCard'
 import { useSlicerParams } from '../store/filterStore'
 import { DimSelect, fmtNum, fmtPct } from './collectionShared'
@@ -52,10 +53,12 @@ interface DqKpis {
   infant_eligible: number; infant_count: number; infant_pct: number
 }
 
-function PctChip({ v }: { v: number }) {
-  // Higher DQ% = worse (more early delinquency), so invert the collection colour scale.
-  const c = v <= 1 ? '#16A34A' : v <= 3 ? '#D97706' : '#DC2626'
-  return <Chip label={fmtPct(v)} size="small" sx={{ height: 18, fontSize: '0.68rem', fontFamily: 'JetBrains Mono, monospace', fontWeight: 700, background: `${c}18`, color: c, border: `1px solid ${c}40`, '& .MuiChip-label': { px: 0.75 } }} />
+/** Higher DQ% = worse. Colour comes from the band against the report's own
+ *  benchmark, not the old fixed <=1 / <=3 cutoffs — early-delinquency rates
+ *  differ enough between segments that one absolute line means nothing. */
+function PctChip({ v, band }: { v: number; band: number | null }) {
+  const c = band == null || band === 2 ? '#64748B' : BAND_INK[band]
+  return <Chip label={fmtPct(v)} size="small" sx={{ height: 18, fontSize: '0.68rem', fontFamily: 'JetBrains Mono, monospace', fontWeight: 700, background: 'transparent', color: c, border: `1px solid ${c}40`, '& .MuiChip-label': { px: 0.75 } }} />
 }
 
 export function DqCategory() {
@@ -87,6 +90,14 @@ export function DqCategory() {
   const ap1Label = DQ_DIMS.find((o) => o.value === ap1)?.label ?? ''
   const ap2Label = DQ_DIMS.find((o) => o.value === ap2)?.label ?? ''
   const hasAp2 = ap2 !== 'none'
+  // Early / infant DQ shaded against the Grand Total, or the AP#2 median when
+  // grouped two deep. `*_eligible` is each rate's denominator: a group with no
+  // eligible loans has no DQ rate and must not shade as the worst on the page.
+  const benchFor = useMemo(
+    () => makeBenchFor(rows.filter((r) => !(r.is_total || r.name === 'Grand Total')),
+                       rows.find((r) => r.is_total || r.name === 'Grand Total'),
+                       ['early_pct', 'infant_pct'], hasAp2),
+    [rows, hasAp2])
 
   return (
     <Box className="space-y-3">
@@ -162,14 +173,16 @@ export function DqCategory() {
                     <TableRow key={i} sx={isGrand
                       ? { borderTop: '2px solid #BFDBFE', background: '#EFF6FF', '& td': { fontWeight: 700, color: '#1E40AF' } }
                       : { '&:hover': { background: '#F8FAFF' } }}>
-                      <TableCell sx={{ fontWeight: isGrand ? 700 : 600, whiteSpace: 'nowrap' }}>{row.name}</TableCell>
+                      <TableCell sx={{ fontWeight: isGrand ? 700 : 600, whiteSpace: 'nowrap',
+                                       borderLeft: `4px solid ${isGrand ? 'transparent'
+                                         : spineColor(heatBand(row.early_pct, benchFor(row, 'early_pct'), 'bad-high', row.early_eligible))}` }}>{row.name}</TableCell>
                       {hasAp2 && <TableCell sx={{ color: '#475569', whiteSpace: 'nowrap' }}>{isGrand ? '' : (row.name2 ?? '—')}</TableCell>}
                       <TableCell align="right" sx={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '0.76rem', borderLeft: '2px solid #DBEAFE' }}>{fmtNum(row.early_eligible)}</TableCell>
                       <TableCell align="right" sx={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '0.76rem' }}>{fmtNum(row.early_count)}</TableCell>
-                      <TableCell align="right"><PctChip v={row.early_pct} /></TableCell>
+                      <TableCell align="right" sx={heatStyle(isGrand ? null : heatBand(row.early_pct, benchFor(row, 'early_pct'), 'bad-high', row.early_eligible), true)}><PctChip v={row.early_pct} band={isGrand ? null : heatBand(row.early_pct, benchFor(row, 'early_pct'), 'bad-high', row.early_eligible)} /></TableCell>
                       <TableCell align="right" sx={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '0.76rem', borderLeft: '2px solid #FEF3C7' }}>{fmtNum(row.infant_eligible)}</TableCell>
                       <TableCell align="right" sx={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '0.76rem' }}>{fmtNum(row.infant_count)}</TableCell>
-                      <TableCell align="right"><PctChip v={row.infant_pct} /></TableCell>
+                      <TableCell align="right"><PctChip v={row.infant_pct} band={isGrand ? null : heatBand(row.infant_pct, benchFor(row, 'infant_pct'), 'bad-high', row.infant_eligible)} /></TableCell>
                     </TableRow>
                   )
                 })}
