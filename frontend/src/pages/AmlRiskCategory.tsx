@@ -1,4 +1,7 @@
 import { useState, useMemo } from 'react'
+import Button from '@mui/material/Button'
+import { ExportCsvButton } from '../components/ExportCsvButton'
+import { RiskQuestions, type Question, type Unassessed } from '../components/RiskQuestions'
 import { useQuery } from '@tanstack/react-query'
 import Box from '@mui/material/Box'
 import Paper from '@mui/material/Paper'
@@ -21,7 +24,7 @@ import {
   CartesianGrid, LabelList, PieChart, Pie,
 } from 'recharts'
 import { api } from '../api/client'
-import { KpiCard } from '../components/KpiCard'
+import { heatBand, heatStyle, spineColor, makeBenchFor } from '../components/heat'
 import { useSlicerParams } from '../store/filterStore'
 
 // ── Analysis-parameter dimensions (AP#1 / AP#2) ────────────────────────────────
@@ -56,28 +59,18 @@ function fmtInr(v: number): string {
 }
 function fmtPct(v: number): string { return `${(v ?? 0).toFixed(2)}%` }
 function fmtNum(v: number): string { return (v ?? 0).toLocaleString('en-IN') }
-function pctOfBook(n: number, total: number): string { return total ? `${((n / total) * 100).toFixed(2)}% of book` : '' }
 
 // High-risk concentration colour ramp (green → red as % rises)
+// riskColor() used to apply fixed cutoffs (0 / <3 / <10 / <30) to the
+// high-risk share. Kept ONLY for the concentration chart, whose bars need a
+// standalone colour with no table benchmark to lean on; the TABLE now shades
+// against the report's own benchmark via components/heat.ts.
 function riskColor(pct: number): string {
   if (pct <= 0)   return '#16A34A'
   if (pct < 3)    return '#65A30D'
   if (pct < 10)   return '#D97706'
   if (pct < 30)   return '#DC2626'
   return '#7F1D1D'
-}
-
-interface AmlKpis {
-  total_borrowers: number; total_pos: number
-  high_count: number; high_pct: number; high_pos: number; low_count: number
-  pep_count: number; pep_pct: number; abroad_count: number
-  luc_pending_count: number; risk_unknown_count: number; pep_unknown_count: number
-}
-interface AmlRow {
-  name: string; name2?: string
-  loans: number; pos: number
-  high: number; high_pct: number; high_pos: number
-  pep: number; pep_pct: number; abroad: number; luc_pending: number
 }
 
 function DimSelect({ label, value, options, onChange, minWidth = 150 }: {
@@ -113,12 +106,52 @@ function QuickFilter({ label, value, options, onChange }: {
   )
 }
 
+interface AmlRow {
+  name: string; name2?: string
+  loans: number; pos: number
+  high: number; high_pct: number; high_pos: number
+  pep: number; pep_pct: number; abroad: number; luc_pending: number
+}
+
+interface NewCases {
+  prior_day: string | null
+  counts: { high_risk: number; pep: number; works_abroad: number
+            luc_pending: number; unclassified: number }
+}
+
+const NEW_CARDS: [keyof NewCases['counts'], string][] = [
+  ['high_risk', 'High Risk'], ['pep', 'PEP'], ['works_abroad', 'Works Abroad'],
+  ['luc_pending', 'LUC Pending'], ['unclassified', 'Unclassified'],
+]
+
+const AML_EXPORT_COLS: [string, string][] = [
+  ['loan_id', 'Loan ID'], ['loan_source', 'Loan Source'],
+  ['business_segment', 'Business Segment'], ['loan_status', 'Loan Status'],
+  ['risk_category', 'AML Risk'], ['pep_flag', 'PEP'],
+  ['work_abroad_flag', 'Works Abroad'], ['luc_flag', 'LUC'],
+  ['nationality', 'Nationality'],
+  ['zone_name', 'Zone'], ['cluster_name', 'Cluster'], ['region_name', 'Region'],
+  ['area_name', 'Unit'], ['branch_name', 'Branch'], ['branch_id', 'Branch ID'],
+  ['lo_id', 'Loan Officer ID'], ['prod_classification', 'Prod. Classification'],
+  ['state_id', 'State'], ['district_id', 'District'], ['pos', 'POS'],
+]
+
+
 export function AmlRiskCategory() {
-  const [ap1, setAp1] = useState('risk_category')
+  // NOT 'risk_category'. Grouped by risk the table restates the cards above it
+  // row for row — 1,594 / 86,849 / 4,909 — and HIGH % reads 100 / 0 / 0, which is
+  // true by construction and says nothing. Region is the first cut that tells
+  // you something the strip cannot: WHERE the risk sits.
+  const [ap1, setAp1] = useState('region_label')
   const [ap2, setAp2] = useState('none')
   const [risk, setRisk] = useState('ALL')
   const [pep, setPep] = useState('ALL')
   const [abroad, setAbroad] = useState('ALL')
+  // Excl W/O is the ACTIVE PORTFOLIO and reconciles to Current Outstanding
+  // Excl-W/O, so it is the default here as everywhere else.
+  const [portfolio, setPortfolio] = useState<'without' | 'with'>('without')
+  // Charts start hidden — the matrix below carries the same figures exactly.
+  const [showCharts, setShowCharts] = useState(false)
   const [sortField, setSortField] = useState<keyof AmlRow>('high')
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
 
@@ -128,16 +161,33 @@ export function AmlRiskCategory() {
     ...(risk !== 'ALL' ? { risk_category: risk } : {}),
     ...(pep !== 'ALL' ? { pep } : {}),
     ...(abroad !== 'ALL' ? { work_abroad: abroad } : {}),
-  }), [slicerParams, risk, pep, abroad])
+    portfolio,
+  }), [slicerParams, risk, pep, abroad, portfolio])
 
   const tableParams = useMemo(() => ({
     ...params, group_by: ap1, ...(ap2 !== 'none' ? { group_by_2: ap2 } : {}),
   }), [params, ap1, ap2])
 
-  const { data: kpis, isLoading: kpiLoading } = useQuery<AmlKpis>({
-    queryKey: ['aml-kpis', params],
-    queryFn: () => api.get('/api/aml/kpis', { params }).then((r) => r.data),
+  // The four questions the origination form actually asks. Answered off one
+  // pass so the section below can put them side by side, PENDING INCLUDED —
+  // a borrower with no answer recorded is unassessed, not low risk.
+  const { data: rq, isLoading: rqLoading } = useQuery<{
+    questions: Question[]; unassessed: Unassessed
+    total_loans: number; total_pos: number
+  }>({
+    queryKey: ['aml-questions', params],
+    queryFn: () => api.get('/api/aml/questions', { params }).then((r) => r.data),
   })
+
+  // Newly-flagged loans: ids present today, absent on the previous report_day.
+  // Gross, not net — ten arrivals against ten departures must not read as zero.
+  const { data: newCases } = useQuery<NewCases>({
+    queryKey: ['aml-new-cases', params],
+    queryFn: () => api.get('/api/aml/new-cases', { params }).then((r) => r.data),
+  })
+
+  const fetchAmlLoans = async () =>
+    (await api.get('/api/aml/loans', { params })).data.rows as Record<string, any>[]
   const { data: tableRows = [], isLoading: tableLoading } = useQuery<AmlRow[]>({
     queryKey: ['aml-group', tableParams],
     queryFn: () => api.get('/api/aml/group-summary', { params: tableParams }).then((r) => r.data),
@@ -189,7 +239,15 @@ export function AmlRiskCategory() {
   [riskRows])
 
   const hasAp2 = ap2 !== 'none'
-  const ap1Label = DIM_OPTIONS.find((o) => o.value === ap1)?.label ?? 'Risk Category'
+  // High-risk share shaded against the Grand Total, or the AP#2 median when
+  // grouped two deep. `loans` is the denominator: a group with no customers
+  // has no high-risk rate and must not shade as the worst on the page.
+  const benchFor = useMemo(
+    () => makeBenchFor(sortedRows.filter((r) => r.name !== 'Grand Total'),
+                       sortedRows.find((r) => r.name === 'Grand Total'),
+                       ['high_pct'], hasAp2),
+    [sortedRows, hasAp2])
+  const ap1Label = DIM_OPTIONS.find((o) => o.value === ap1)?.label ?? 'Region ID & Name'
   const ap2Label = DIM_OPTIONS.find((o) => o.value === ap2)?.label ?? ''
 
   return (
@@ -209,6 +267,20 @@ export function AmlRiskCategory() {
         <QuickFilter label="PEP" value={pep} onChange={setPep} options={[{ v: 'ALL', l: 'All' }, { v: 'PEP', l: 'PEP only' }]} />
         <QuickFilter label="Abroad" value={abroad} onChange={setAbroad} options={[{ v: 'ALL', l: 'All' }, { v: 'Works Abroad', l: 'Abroad only' }]} />
         <Box sx={{ flex: 1, minWidth: 8 }} />
+        {/* Was a second toolbar row of its own. One control strip, not two —
+            the row it lived on carried three controls and a lot of white. */}
+        <ToggleButtonGroup size="small" exclusive value={portfolio} sx={{ flexShrink: 0, height: 26 }}
+          onChange={(_, v) => v && setPortfolio(v)}>
+          <ToggleButton value="without" sx={{ fontSize: '0.65rem', px: 1, textTransform: 'none' }}>Excl. W/O</ToggleButton>
+          <ToggleButton value="with" sx={{ fontSize: '0.65rem', px: 1, textTransform: 'none' }}>With W/O</ToggleButton>
+        </ToggleButtonGroup>
+        <Button size="small" variant="text" onClick={() => setShowCharts((v) => !v)}
+          sx={{ fontSize: '0.66rem', textTransform: 'none', py: 0.2, px: 1,
+                minWidth: 0, flexShrink: 0, whiteSpace: 'nowrap', color: '#64748B' }}>
+          {showCharts ? 'Hide charts' : 'Show charts'}
+        </Button>
+        <ExportCsvButton rows={[]} columns={AML_EXPORT_COLS} fetchRows={fetchAmlLoans}
+          filename="aml_risk_loans" />
         <Tooltip title="Data as-of (T-1)" placement="left">
           <Box sx={{ textAlign: 'right', flexShrink: 0 }}>
             <Box sx={{ fontSize: '0.58rem', color: '#94A3B8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>As of</Box>
@@ -217,17 +289,26 @@ export function AmlRiskCategory() {
         </Tooltip>
       </Box>
 
-      {/* KPI cards */}
-      <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(150px, 1fr))', gap: 1.5, alignItems: 'stretch' }}>
-        <KpiCard label="Borrowers Screened" value={kpis ? fmtNum(kpis.total_borrowers) : '—'} sub={kpis ? fmtInr(kpis.total_pos) + ' POS' : ''} variant="default" loading={kpiLoading} />
-        <KpiCard label="High Risk" value={kpis ? fmtNum(kpis.high_count) : '—'} sub={kpis ? `${fmtPct(kpis.high_pct)} · ${fmtInr(kpis.high_pos)}` : ''} variant="red" loading={kpiLoading} />
-        <KpiCard label="PEP (Politically Exposed)" value={kpis ? fmtNum(kpis.pep_count) : '—'} sub={kpis ? fmtPct(kpis.pep_pct) + ' of book' : ''} variant="purple" loading={kpiLoading} />
-        <KpiCard label="Works Abroad" value={kpis ? fmtNum(kpis.abroad_count) : '—'} sub={kpis ? pctOfBook(kpis.abroad_count, kpis.total_borrowers) : ''} variant="amber" loading={kpiLoading} />
-        <KpiCard label="LUC Pending" value={kpis ? fmtNum(kpis.luc_pending_count) : '—'} sub={kpis ? pctOfBook(kpis.luc_pending_count, kpis.total_borrowers) : ''} variant="amber" loading={kpiLoading} />
-        <KpiCard label="Unclassified" value={kpis ? fmtNum((kpis.risk_unknown_count ?? 0) + (kpis.pep_unknown_count ?? 0)) : '—'} sub="risk / PEP flag missing" variant="default" loading={kpiLoading} />
-      </Box>
+      {/* ── Client Risk Categorization ─────────────────────────────────────
+          THE page. Five cards: the AML risk grade plus the four questions the
+          origination form asks, each with its own pending count.
+
+          A separate KPI row used to sit underneath this and repeated PEP, Works
+          Abroad and LUC Pending — the same three numbers twice on one screen,
+          plus Loans / POS which now live in the banner and Unclassified which is
+          the risk card's own pending. Removed 2026-08-26: the duplicate row was
+          most of the page's height and none of its information. */}
+      <RiskQuestions questions={rq?.questions ?? []} unassessed={rq?.unassessed}
+        loading={rqLoading} priorDay={newCases?.prior_day}
+        newBy={{
+          risk: newCases?.counts?.high_risk,
+          pep: newCases?.counts?.pep,
+          abroad: newCases?.counts?.works_abroad,
+          luc: newCases?.counts?.luc_pending,
+        }} />
 
       {/* Concentration + risk composition — side by side */}
+      {showCharts && (
       <Box className="grid grid-cols-1 lg:grid-cols-2 gap-3">
         <Paper sx={{ overflow: 'hidden' }}>
           <Box sx={{ px: 2.5, py: 1.25, borderBottom: '1px solid rgba(0,0,0,0.06)', background: '#FEF2F2' }}>
@@ -285,6 +366,7 @@ export function AmlRiskCategory() {
           </Box>
         </Paper>
       </Box>
+      )}
 
       {/* Matrix table */}
       <Paper sx={{ overflow: 'hidden' }}>
@@ -317,7 +399,8 @@ export function AmlRiskCategory() {
                   const isGrand = row.name === 'Grand Total'
                   return (
                     <TableRow key={idx} sx={isGrand ? { borderTop: '2px solid #BFDBFE', background: '#EFF6FF', '& td': { fontWeight: 700, color: '#1E40AF' } } : { '&:hover': { background: '#F8FAFF' } }}>
-                      <TableCell>
+                      <TableCell sx={{ borderLeft: `4px solid ${isGrand ? 'transparent'
+                        : spineColor(heatBand(row.high_pct, benchFor(row, 'high_pct'), 'bad-high', row.loans))}` }}>
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                           {ap1 === 'risk_category' && !isGrand && (
                             <Box sx={{ width: 8, height: 8, borderRadius: '50%', flexShrink: 0, background: RISK_COLORS[row.name] ?? '#94A3B8' }} />
@@ -329,7 +412,8 @@ export function AmlRiskCategory() {
                       <TableCell align="right" sx={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '0.78rem' }}>{fmtNum(row.loans)}</TableCell>
                       <TableCell align="right" sx={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '0.78rem', whiteSpace: 'nowrap' }}>{fmtInr(row.pos)}</TableCell>
                       <TableCell align="right" sx={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '0.78rem', fontWeight: 700, color: row.high > 0 ? '#B91C1C' : '#94A3B8' }}>{fmtNum(row.high)}</TableCell>
-                      <HighPctCell value={row.high_pct} />
+                      <HighPctCell value={row.high_pct}
+                        band={isGrand ? null : heatBand(row.high_pct, benchFor(row, 'high_pct'), 'bad-high', row.loans)} />
                       <TableCell align="right" sx={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '0.78rem', color: row.pep > 0 ? '#6D28D9' : '#94A3B8' }}>{fmtNum(row.pep)}</TableCell>
                       <TableCell align="right" sx={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '0.78rem', color: '#475569' }}>{fmtNum(row.abroad)}</TableCell>
                       <TableCell align="right" sx={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '0.78rem', color: row.luc_pending > 0 ? '#B45309' : '#94A3B8' }}>{fmtNum(row.luc_pending)}</TableCell>
@@ -348,11 +432,10 @@ export function AmlRiskCategory() {
   )
 }
 
-function HighPctCell({ value }: { value: number }) {
-  const c = riskColor(value)
+function HighPctCell({ value, band }: { value: number; band: number | null }) {
   return (
-    <TableCell align="right" sx={{ background: `${c}14`, borderLeft: '1px solid rgba(0,0,0,0.03)' }}>
-      <Box component="span" sx={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '0.74rem', fontWeight: 700, color: c }}>
+    <TableCell align="right" sx={{ borderLeft: '1px solid rgba(0,0,0,0.03)', ...heatStyle(band, true) }}>
+      <Box component="span" sx={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '0.78rem' }}>
         {fmtPct(value)}
       </Box>
     </TableCell>
