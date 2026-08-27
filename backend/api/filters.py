@@ -74,6 +74,10 @@ SLICER_GROUPS = [
     ]),
     ("Loan Attributes", [
         ("loan_status",     "Loan Status",           "loan_status"),
+        # Source status verbatim. loan_status folds D and I into "Death"; this
+        # separates the two death stages — D = claim not yet filed (principal
+        # still outstanding), I = claim filed and principal already cleared.
+        ("status_code",     "Status Code",           "status_code"),
         ("disb_year",       "Disbursement Year",     "disb_year"),
         ("cycle",           "Cycle",                 "cycle_no"),
         ("purpose",         "Purpose",               "purpose_id"),
@@ -93,6 +97,7 @@ SLICER_ORDER = {
     "od_bucket":        ["Regular", "1 - 30", "31 - 60", "61 - 90",
                          "91 - 180", "181 - 360", "360 +"],
     "loan_status":      ["Active", "Death", "Write-off"],
+    "status_code":      ["A", "D", "I", "W"],
     "bucket_movement":  ["Improved", "Static", "Worsened", "N/A"],
     "od_movement":      ["Not OD", "OD Slippage", "Regularised", "Continuing"],
 }
@@ -104,6 +109,8 @@ SLICER_EXCLUDE = {
     # 'Closed' = movement-only loans (closed this month) carried on rpt_aum_status
     # solely for OD Status / Bucket Movement — not a live-book status, hide it.
     "loan_status":  {"Closed"},
+    # 'X' is closed — movement-only rows, same reason 'Closed' is hidden above.
+    "status_code":  {"X"},
 }
 
 

@@ -73,6 +73,7 @@ const SLICER_TO_PARAM: Record<string, string> = {
   od_movement:     'od_movement',
   bucket_movement: 'bucket_movement',
   loan_status:     'loan_status',
+  status_code:     'status_code',
   branch_state:    'branch_state',
   district:        'district',
   lo:              'lo',

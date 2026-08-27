@@ -74,6 +74,7 @@ def _apply_filters(df, f) -> pd.DataFrame:
     df = multi(df, "lender_id",           f.get("lender"))
     df = multi(df, "caste",               f.get("caste"))
     df = multi(df, "religion",            f.get("religion"))
+    df = multi(df, "loan_id",             f.get("loan_id"))
     return df
 
 
@@ -108,6 +109,9 @@ def _filter_params(
     cycle: Optional[str] = Query(None), purpose: Optional[str] = Query(None),
     facility: Optional[str] = Query(None), lender: Optional[str] = Query(None),
     caste: Optional[str] = Query(None), religion: Optional[str] = Query(None),
+    # Loan ID is a LOOKUP, not a grouping — one row per loan is unusable as
+    # an AP dimension, so it filters instead. Comma-separated ids allowed.
+    loan_id: Optional[str] = Query(None),
     portfolio: Optional[str] = Query(None),
 ) -> dict:
     return dict(
@@ -115,7 +119,7 @@ def _filter_params(
         branch=branch, branch_state=branch_state, district=district, prod_class=prod_class,
         od_status=od_status, od_bucket=od_bucket, bucket_movement=bucket_movement,
         loan_status=loan_status, disb_year=disb_year, cycle=cycle, purpose=purpose,
-        facility=facility, lender=lender, caste=caste, religion=religion, portfolio=portfolio,
+        facility=facility, lender=lender, caste=caste, religion=religion, portfolio=portfolio, loan_id=loan_id,
     )
 
 
@@ -149,13 +153,29 @@ def _enrich_slippage(df: pd.DataFrame) -> pd.DataFrame:
 def _freq_slice(filters: dict, freq: str):
     """Loans with a given previous-slippage count (12M), from rpt_od_slippage.
     Returns the filtered per-loan frame (all are current OD-slippage loans)."""
-    slip = read_report("rpt_od_slippage")
+    slip = _read_slippage()
     if slip.empty:
         return slip
     slip = _apply_filters(_enrich_slippage(slip), filters).copy()
     want = "3+" if freq in ("3", "3+") else freq
     slip["_fb"] = slip["prev_slippage_count"].map(_freq_bucket)
     return slip[slip["_fb"] == want]
+
+
+
+def _read_slippage():
+    """rpt_od_slippage restricted to the OD Status matrix basis.
+
+    Since 2026-08-13 the table also carries loans that slipped this month and
+    were then written off, flagged in_od_matrix = FALSE, so one table can serve
+    both "every loan that slipped" and "the matrix column". Every consumer that
+    must equal the OD Status matrix or the Excel OD Slippage sheet — both of
+    which drop write-offs — reads through here.
+    """
+    df = read_report("rpt_od_slippage")
+    if not df.empty and "in_od_matrix" in df.columns:
+        df = df[df["in_od_matrix"].astype(bool)]
+    return df
 
 
 @router.get("/od-status/kpis")
@@ -296,7 +316,7 @@ def od_status_slippage(
 ):
     """Previous Slippage (12M): current OD-slippage loans grouped by AP#1 ×
     # of previous slippages (0/1/2/3+), each with # loans and POS ₹."""
-    df = read_report("rpt_od_slippage")
+    df = _read_slippage()
     if df.empty:
         return {"freqs": FREQ_BUCKETS, "rows": []}
     df = _apply_filters(df, filters)
@@ -339,20 +359,71 @@ def od_status_slippage(
 # broken down by AP#1 (× AP#2) × # of previous slippages (12M), # and POS ₹.
 # ═════════════════════════════════════════════════════════════════════════════
 
-@router.get("/od-slippage/kpis")
-def od_slippage_kpis(filters: dict = Depends(_filter_params), user: dict = Depends(get_current_user)):
+# Columns the OD Slippage loan-wise CSV ships, in order.
+OD_SLIP_EXPORT_COLS = [
+    "loan_id", "business_segment", "loan_status", "in_od_matrix",
+    "prev_slippage_count", "pos",
+    "zone_name", "cluster_name", "region_name", "area_name", "branch_name",
+    "branch_id", "lo_id", "state_id", "district_id",
+]
+
+
+@router.get("/od-slippage/loans")
+def od_slippage_loans(filters: dict = Depends(_filter_params),
+                      user: dict = Depends(get_current_user)):
+    """Loan-wise rows for the CSV, under the same filters and data scope as the
+    page. rpt_od_slippage is already loan grain, so no separate source is needed.
+
+    Read UNFILTERED by in_od_matrix and ship the flag as a COLUMN: the file then
+    explains itself — matrix-basis rows (what the OD Status matrix and the Excel
+    sheet count) and the loans that slipped but have since been written off, in
+    one file, distinguishable. The page's own total/split cards use the same
+    split, so the CSV reconciles to what is on screen.
+    """
     df = read_report("rpt_od_slippage")
     if df.empty:
-        return {}
-    df = _apply_filters(_enrich_slippage(df), filters).copy()
+        return {"rows": [], "columns": OD_SLIP_EXPORT_COLS}
+    df = _apply_filters(_enrich_slippage(df), filters)
     if df.empty:
-        return {"total_count": 0, "total_pos": 0, "first_time": 0, "repeat": 0}
-    df["_fb"] = df["prev_slippage_count"].map(_freq_bucket)
+        return {"rows": [], "columns": OD_SLIP_EXPORT_COLS}
+    cols = [c for c in OD_SLIP_EXPORT_COLS if c in df.columns]
+    out = df[cols].copy()
+    if "in_od_matrix" in out.columns:
+        out["in_od_matrix"] = out["in_od_matrix"].map(
+            lambda v: "Counts in OD matrix" if bool(v) else "Excluded - written off")
+    sort = [c for c in ("prev_slippage_count", "pos") if c in out.columns]
+    if sort:
+        out = out.sort_values(sort, ascending=False)
+    return {"rows": out.fillna("").to_dict("records"), "columns": cols}
+
+
+@router.get("/od-slippage/kpis")
+def od_slippage_kpis(filters: dict = Depends(_filter_params), user: dict = Depends(get_current_user)):
+    # Read UNFILTERED here, unlike every other consumer: this page is the one
+    # that has to show the whole picture. rpt_od_slippage carries loans that
+    # slipped and were then written off (in_od_matrix = FALSE); the listed rows
+    # and the matrix column exclude them, so without this the page total sits
+    # below MTD FTOD with no explanation — which is exactly what was reported
+    # (4,000 vs 3,997). all_count reconciles to rpt_collection.mtd_ftod.
+    raw = read_report("rpt_od_slippage")
+    if raw.empty:
+        return {}
+    raw = _apply_filters(_enrich_slippage(raw), filters).copy()
+    if raw.empty:
+        return {"total_count": 0, "total_pos": 0, "first_time": 0, "repeat": 0,
+                "all_count": 0, "excluded_writeoff": 0}
+    in_matrix = (raw["in_od_matrix"].astype(bool) if "in_od_matrix" in raw.columns
+                 else pd.Series(True, index=raw.index))
+    df = raw[in_matrix]
     return {
+        # listed rows — the OD Status matrix basis, write-offs dropped
         "total_count": int(len(df)),
         "total_pos":   float(df["pos"].sum()),
         "first_time":  int((df["prev_slippage_count"] == 0).sum()),   # 0 previous slippages
         "repeat":      int((df["prev_slippage_count"] > 0).sum()),     # slipped before
+        # every loan that slipped this month, and the part not listed above
+        "all_count":         int(len(raw)),
+        "excluded_writeoff": int((~in_matrix).sum()),
     }
 
 
@@ -365,7 +436,7 @@ def od_slippage_group_summary(
 ):
     """OD Slippage — AP#1 (× AP#2) × # of previous slippages (0/1/2/3+),
     each with # loans and POS ₹, plus Total # and Total POS ₹ per row."""
-    df = read_report("rpt_od_slippage")
+    df = _read_slippage()
     if df.empty:
         return {"freqs": FREQ_BUCKETS, "rows": []}
     df = _apply_filters(_enrich_slippage(df), filters).copy()
