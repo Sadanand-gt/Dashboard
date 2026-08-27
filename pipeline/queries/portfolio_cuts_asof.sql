@@ -1,37 +1,74 @@
 -- =============================================================================
--- Report  : PORTFOLIO CUTS
--- Source  : "August, 2026 Dashboards.xlsb" sheets 28-39
---           ("Portfolio Cuts - Business Seg" ... "Portfolio Cuts - Religion")
+-- Report  : PORTFOLIO CUTS — AS ON AN ARBITRARY MONTH-END
+-- Writes  : rpt_portfolio_cuts_hist  (report_day = the as-on date)
+-- Params  : {as_on}       month-end date, e.g. 2026-07-31
+--           {wo_triples}  write-off master, injected by the runner
 --
--- Every one of those sheets is the SAME table: a dimension down the side and,
--- across the top, # Loans by DPD bucket / Rs POS by DPD bucket / PAR % /
--- write-off in the last 3 months. Only the side dimension changes. So this
--- builds ONE tall table: the live book is scanned once and unpivoted into
--- (cut_type, cut_value) pairs, and the dashboard picks a cut_type.
+-- This is the TIME-TRAVELLED twin of portfolio_cuts.sql. The live file is left
+-- untouched and keeps serving "today"; every difference here exists because a
+-- historical cut cannot read current-state columns.
 --
--- Universe: the LIVE book, identical to aum_live.sql / Current Outstanding —
---           same closure guard, same junk-id floor, same later-disbursement
---           dedupe. POS is principal_outstanding (the core system's balance).
+-- WHY A SEPARATE FILE AND NOT A PARAMETER ON THE LIVE ONE
+--   The live report reads la.dpd and la.principal_outstanding — the core
+--   system's CURRENT balance and CURRENT delinquency. Neither can be rewound.
+--   Rebuilding them from repayment history is a materially different query, and
+--   folding both paths into one file would put the daily report one typo away
+--   from breaking. The two are reconciled instead: run this with
+--   {as_on} = current_date - 1 and it reproduces the live table (see
+--   verify_asof() in gen_portfolio_cuts_asof.py).
 --
--- Write-off measures are a SEPARATE universe on the same row: loans written off
--- in the last 3 calendar months, carrying their own cut values. They are not in
--- the live book, so they are counted through wo_3m only and never in n_*/pos_*.
+-- THE FOUR THINGS THAT MOVE WITH THE DATE
 --
--- Location Type (Rural/Semi-Urban/Urban) is NOT built. Excel sources it from the
--- AUM Loandump's RURAL/URBAN column; the replica has no equivalent. area_master
--- .area_type holds TM/ZM/CR (hierarchy codes, not habitat) and
--- village_master.rural_flag is empty. Confirmed 2026-08-07.
+--   1. UNIVERSE. The live file requires status IN ('A','D','I','W') — a
+--      current-state test. A loan that closed in 2024 reads 'C' today, so that
+--      guard would erase it from every 2023 and 2024 month-end and the book
+--      would look impossibly small in the past. Here the universe is defined by
+--      DATES only: disbursed on or before {as_on}, and not closed until after
+--      it. Status is used solely to drop junk ('R') and to label the row.
+--
+--   2. POS. Recomputed as disbursed-so-far minus principal collected through
+--      {as_on}. IL staged (tranched) loans take disbursed-so-far from
+--      loan_account_il_audit, NOT total_loan_amount — the sanction would report
+--      undisbursed money as outstanding; on 2026-07-31 that was four loans and
+--      Rs 2,57,829. JLG has no staging and is measured at a zero gap, so it uses
+--      total_loan_amount. Identical basis to aum_loans.sql's prev_pos and to the
+--      trend engine, so the three agree by construction.
+--
+--   3. DPD. Recomputed as the age of the OLDEST instalment whose cumulative
+--      demand was still not covered by cash received by {as_on} — the same
+--      cash-vs-due method as aum_status.sql's EOM DPD and od_slippage.sql. One
+--      DPD method across the warehouse; see report-consistency-rules.
+--
+--   4. WRITE-OFF STATUS. A loan written off AFTER {as_on} was NOT written off
+--      at {as_on}, so the write-off master is joined on wo_date <= {as_on}. The
+--      "last 3 months" window is the three calendar months ending at {as_on},
+--      not the three ending today.
+--
+-- Residual-tenure bands already key off the anchor, so they follow the date for
+-- free. Ticket, ROI, original tenure, purpose, cycle, caste, religion and
+-- geography are loan attributes and do not move.
 -- =============================================================================
 
 WITH
 
 anchor AS (
-    -- T-1: the warehouse holds data through yesterday.
-    SELECT (current_date - 1)::date AS d,
-    -- "Write-off in Last 3 Months" = this calendar month plus the previous two.
-           (date_trunc('month', current_date - 1) - interval '2 months')::date AS wo_from
+    SELECT DATE '{as_on}'                                                    AS d,
+           date_trunc('month', DATE '{as_on}')::date                         AS month_start,
+           (date_trunc('month', DATE '{as_on}') - interval '2 months')::date AS wo_from
 ),
 
+-- Write-off master, UNFILTERED. The "had it happened by {as_on}" test cannot be
+-- applied here any more, because the effective write-off date is
+--     coalesce(la.writeoff_date, w.wo_date)
+-- and la.writeoff_date is only visible once the loan tables are joined.
+--
+-- WHY THE COALESCE. Neither source covers the whole history on its own:
+--     core la.writeoff_date   2011-03-17 .. 2025-03-31   (14,340 JLG, 111 IL)
+--     writeoff_master         2023-09-01 .. 2026-06-01   (30,661 loans)
+-- Using the master alone left every month before Mar-2024 with a write-off book
+-- of ZERO while rpt_trend_full showed thousands, because the core had written
+-- them off years before the master begins. trend_full_jlg.sql already resolves
+-- it this way; this now matches, so the two engines answer the same question.
 wo_master AS (
     SELECT v.loan_id::bigint AS loan_id, v.wo_date::date AS wo_date,
            v.writeoff_amount::numeric AS wo_amount
@@ -51,25 +88,94 @@ hierarchy AS (
 ),
 
 -- ═════════════════════════════════════════════════════════════════════════════
+-- CASH RECEIVED THROUGH {as_on}  — the basis for both POS and DPD
+-- ═════════════════════════════════════════════════════════════════════════════
+il_cash AS (
+    SELECT loan_id,
+           sum(principal_collected) AS prin_coll,
+           sum(principal_collected + interest_collected) AS paid
+    FROM public.repayment_detail_il
+    WHERE status IN ('A','V')
+      AND collection_date_time::date <= (SELECT d FROM anchor)
+    GROUP BY loan_id
+),
+jlg_cash AS (
+    SELECT loan_id,
+           sum(principal_collected) AS prin_coll,
+           sum(principal_collected + interest_collected) AS paid
+    FROM public.repayment_detail
+    WHERE status IN ('A','V')
+      AND collection_date::date <= (SELECT d FROM anchor)
+    GROUP BY loan_id
+),
+
+-- Disbursed-so-far at {as_on} for STAGED IL loans only. The inner subquery
+-- narrows the audit scan to loans that were ever part-disbursed; single-tranche
+-- loans never enter, so this is a no-op for the rest of the book.
+il_disb_asof AS MATERIALIZED (
+    SELECT DISTINCT ON (a.loan_id)
+           a.loan_id, a.principal_total AS disbursed
+    FROM public.loan_account_il_audit a
+    WHERE a.principal_total IS NOT NULL
+      AND coalesce(a.modified_on, a.created_on) IS NOT NULL
+      AND coalesce(a.modified_on, a.created_on)::date <= (SELECT d FROM anchor)
+      AND a.loan_id IN (
+          SELECT loan_id FROM public.loan_account_il_audit
+          WHERE principal_total IS NOT NULL AND total_loan_amount IS NOT NULL
+          GROUP BY loan_id HAVING bool_or(principal_total <> total_loan_amount))
+    ORDER BY a.loan_id, coalesce(a.modified_on, a.created_on) DESC
+),
+
+-- ═════════════════════════════════════════════════════════════════════════════
+-- DPD AT {as_on} — age of the oldest instalment not covered by cash by then.
+-- Rs 0.50 tolerance absorbs the instalment principal/interest split rounding.
+-- ═════════════════════════════════════════════════════════════════════════════
+il_dpd AS (
+    SELECT rs.loan_id,
+           ((SELECT d FROM anchor) - min(rs.demand_date)::date) + 1 AS dpd
+    FROM public.repayment_schedule_il rs
+    LEFT JOIN il_cash c ON c.loan_id = rs.loan_id
+    WHERE rs.demand_date::date <= (SELECT d FROM anchor)
+      AND (rs.cumulative_principal_due + rs.cumulative_interest_due)
+          > coalesce(c.paid, 0) + 0.5
+    GROUP BY rs.loan_id
+),
+jlg_dpd AS (
+    SELECT rs.loan_id,
+           ((SELECT d FROM anchor) - min(rs.demand_date)::date) + 1 AS dpd
+    FROM public.repayment_schedule rs
+    LEFT JOIN jlg_cash c ON c.loan_id = rs.loan_id
+    WHERE rs.demand_date::date <= (SELECT d FROM anchor)
+      AND (rs.cumulative_principal_due + rs.cumulative_interest_due)
+          > coalesce(c.paid, 0) + 0.5
+    GROUP BY rs.loan_id
+),
+
+-- ═════════════════════════════════════════════════════════════════════════════
 -- IL
 -- ═════════════════════════════════════════════════════════════════════════════
 il_loans AS (
     SELECT
         CASE WHEN upper(trim(la.product_id::text)) LIKE '%SUGAM%'
                OR upper(trim(la.product_id::text)) LIKE '%UDYOGINI%'
-               -- %SECURED% belongs with LAP. Omitting it put SECURED_TOP_UP loans
-               -- in IEL, so this file disagreed with aum_status.sql and Excel
-               -- (LAP 88 vs 91). Verified 2026-08-08: 10038007, 10039190, 10040094.
                OR upper(trim(la.product_id::text)) LIKE '%SECURED%'
              THEN 'LAP' ELSE 'IEL' END          AS business_segment,
         la.loan_id,
         la.branch_id,
         la.loan_officer::varchar                AS lo_id,
-        coalesce(la.principal_outstanding, 0)   AS pos,
-        coalesce(la.dpd, 0)                     AS dpd,
-        CASE WHEN la.status = 'W' OR (w.loan_id IS NOT NULL
-                  AND (w.wo_date IS NULL OR la.disbursement_date::date <= w.wo_date))
-             THEN 'W' ELSE la.status END        AS status,
+        greatest(coalesce(de.disbursed, la.total_loan_amount, 0)
+                 - coalesce(ic.prin_coll, 0), 0)  AS pos,
+        coalesce(d.dpd, 0)                      AS dpd,
+        -- Written off ONLY if the write-off had happened by {as_on}. la.status
+        -- 'W' is a current-state flag and is therefore not sufficient on its own.
+        -- Written off ONLY if the write-off had happened by {as_on}, measured on
+        -- the effective date: the core's own writeoff_date when it has one, else
+        -- the master's. la.status = 'W' is a current-state flag and says nothing
+        -- about that date, so it is deliberately not consulted.
+        CASE WHEN coalesce(la.writeoff_date::date, w.wo_date)
+                  <= (SELECT d FROM anchor)      THEN 'W'
+             WHEN la.status IN ('D','I')         THEN la.status
+             ELSE 'A' END                       AS status,
         la.tenure_in_months::numeric            AS orig_tenure_m,
         la.last_demand_date::date               AS maturity_date,
         la.interest_rate::numeric               AS roi,
@@ -80,18 +186,29 @@ il_loans AS (
         nullif(trim(b.caste::text), '')         AS caste,
         nullif(trim(b.religion::text), '')      AS religion
     FROM public.loan_account_il la
-    LEFT JOIN wo_master w ON w.loan_id = la.loan_id
+    LEFT JOIN wo_master     w  ON w.loan_id  = la.loan_id
+    LEFT JOIN il_cash       ic ON ic.loan_id = la.loan_id
+    LEFT JOIN il_disb_asof  de ON de.loan_id = la.loan_id
+    LEFT JOIN il_dpd        d  ON d.loan_id  = la.loan_id
     LEFT JOIN public.brrwroth_il b ON b.cust_id = la.cust_id
-    WHERE la.status IN ('A','D','I','W')
+    WHERE la.status <> 'R'
       AND la.loan_id >= 10000000
+      -- On the book AT {as_on}: disbursed by then, not closed until after.
+      AND la.disbursement_date::date <= (SELECT d FROM anchor)
       AND (la.closure_date IS NULL
-           OR la.closure_date::date > current_date - 1
-           OR la.status = 'W')
+           OR la.closure_date::date > (SELECT d FROM anchor)
+           -- A write-off IS a closure in the core system, so the guard above
+           -- would erase the written-off book from every historical cut: at
+           -- 2026-03-31 it dropped 1,540 loans and left the With/Excl W-O toggle
+           -- with nothing to move. The live file exempts them the same way, via
+           -- `OR la.status = 'W'`; here the exemption has to be date-bound,
+           -- because wo_master is already filtered to wo_date <= {as_on}.
+           OR coalesce(la.writeoff_date::date, w.wo_date) <= (SELECT d FROM anchor))
       AND NOT EXISTS (
           SELECT 1 FROM public.loan_account_il il
           WHERE il.loan_id = la.loan_id
-            AND il.status IN ('A','D','I','W')
-            AND il.disbursement_date > la.disbursement_date)
+            AND il.disbursement_date > la.disbursement_date
+            AND il.disbursement_date::date <= (SELECT d FROM anchor))
 ),
 
 -- ═════════════════════════════════════════════════════════════════════════════
@@ -103,11 +220,17 @@ jlg_loans AS (
         la.loan_id,
         cm.branch_id,
         cm.assigned_to::varchar                 AS lo_id,
-        coalesce(la.prin_os, 0)                 AS pos,
-        coalesce(la.dpd, 0)                     AS dpd,
-        CASE WHEN la.status = 'W' OR (w.loan_id IS NOT NULL
-                  AND (w.wo_date IS NULL OR la.disbursement_date::date <= w.wo_date))
-             THEN 'W' ELSE la.status END        AS status,
+        greatest(coalesce(la.total_loan_amount, 0)
+                 - coalesce(jc.prin_coll, 0), 0)  AS pos,
+        coalesce(d.dpd, 0)                      AS dpd,
+        -- Written off ONLY if the write-off had happened by {as_on}, measured on
+        -- the effective date: the core's own writeoff_date when it has one, else
+        -- the master's. la.status = 'W' is a current-state flag and says nothing
+        -- about that date, so it is deliberately not consulted.
+        CASE WHEN coalesce(la.writeoff_date::date, w.wo_date)
+                  <= (SELECT d FROM anchor)      THEN 'W'
+             WHEN la.status IN ('D','I')         THEN la.status
+             ELSE 'A' END                       AS status,
         la.loan_tenure::numeric                 AS orig_tenure_m,
         la.last_demand_date::date               AS maturity_date,
         la.int_rate::numeric                    AS roi,
@@ -119,21 +242,35 @@ jlg_loans AS (
         nullif(trim(b.religion::text), '')      AS religion
     FROM public.home_loan_account la
     JOIN public.home_center_master cm ON cm.center_id = la.center_id
-    LEFT JOIN wo_master w ON w.loan_id = la.loan_id
+    LEFT JOIN wo_master  w  ON w.loan_id  = la.loan_id
+    LEFT JOIN jlg_cash   jc ON jc.loan_id = la.loan_id
+    LEFT JOIN jlg_dpd    d  ON d.loan_id  = la.loan_id
     LEFT JOIN public.home_brrwr_misc b ON b.cust_id = la.cust_id
-    -- Universe guards identical to aum_live.sql's jlg_loans, so Portfolio Cuts
-    -- totals tie to Current Outstanding rather than drifting from it.
-    WHERE la.status IN ('A','D','I','W')
+    WHERE la.status <> 'R'
       AND la.loan_id >= 10000000
-      AND (la.status != 'W' OR la.prin_os > 0)
+      AND la.disbursement_date::date <= (SELECT d FROM anchor)
       AND (la.closure_date IS NULL
-           OR la.closure_date::date > current_date - 1
-           OR la.status = 'W')
+           OR la.closure_date::date > (SELECT d FROM anchor)
+           -- A write-off IS a closure in the core system, so the guard above
+           -- would erase the written-off book from every historical cut: at
+           -- 2026-03-31 it dropped 1,540 loans and left the With/Excl W-O toggle
+           -- with nothing to move. The live file exempts them the same way, via
+           -- `OR la.status = 'W'`; here the exemption has to be date-bound,
+           -- because wo_master is already filtered to wo_date <= {as_on}.
+           OR coalesce(la.writeoff_date::date, w.wo_date) <= (SELECT d FROM anchor))
+      -- Mirrors the live file's `(la.status != 'W' OR la.prin_os > 0)`: a
+      -- write-off carrying nothing outstanding at the cut is not part of the
+      -- write-off book. Measured against the recomputed balance, not prin_os,
+      -- which is a current-state column.
+      AND (coalesce(la.writeoff_date::date, w.wo_date) > (SELECT d FROM anchor)
+           OR coalesce(la.writeoff_date::date, w.wo_date) IS NULL
+           OR greatest(coalesce(la.total_loan_amount, 0)
+                       - coalesce(jc.prin_coll, 0), 0) > 0)
       AND NOT EXISTS (
           SELECT 1 FROM public.loan_account_il il
           WHERE il.loan_id = la.loan_id
-            AND il.status IN ('A','D','I','W')
-            AND il.disbursement_date > la.disbursement_date)
+            AND il.disbursement_date > la.disbursement_date
+            AND il.disbursement_date::date <= (SELECT d FROM anchor))
 ),
 
 all_loans AS (
@@ -142,11 +279,8 @@ all_loans AS (
     SELECT * FROM jlg_loans
 ),
 
--- ═════════════════════════════════════════════════════════════════════════════
--- Per-loan cut values. Bands follow the Excel sheets exactly; the 21,000-50,000
--- ticket band was not visible in the saved (filtered) workbook and is included
--- to complete the ladder. Codes are expanded to the Excel labels 1:1.
--- ═════════════════════════════════════════════════════════════════════════════
+-- Identical labelling to portfolio_cuts.sql. Kept verbatim so a historical cut
+-- and today's cut band a loan the same way.
 labelled AS (
     SELECT
         al.*,
@@ -165,8 +299,6 @@ labelled AS (
              WHEN al.orig_tenure_m <= 36        THEN '25 - 36 M'
              ELSE                                    '> 36 M' END AS orig_tenure_band,
 
-        -- Residual tenure from last_demand_date for BOTH books (the final
-        -- scheduled instalment is the effective maturity).
         CASE WHEN al.maturity_date IS NULL                                    THEN 'Unknown'
              WHEN al.maturity_date <= (SELECT d FROM anchor)                  THEN 'Matured'
              WHEN al.maturity_date <= (SELECT d FROM anchor) + 90             THEN '1 - 3 M'
@@ -195,55 +327,12 @@ labelled AS (
              WHEN al.ticket <= 1000000 THEN '5,01,000 - 10,00,000'
              ELSE                           '> 10,00,000' END AS ticket_band,
 
-        -- A disbursed loan is at least cycle 1, so 0 (or negative) is a source
-        -- data gap. One live LAP loan carries it — 10040094, product
-        -- SECURED_TOP_UP_60M_24_P — where the top-up was booked without a cycle.
-        -- Reported as Cycle 1 (user's decision, 2026-08-26): a disbursed loan
-        -- has to sit in some cycle and 1 is the floor. NULL stays Unknown —
-        -- there are none today, but an absent value is not the same as a zero.
-        CASE WHEN al.cycle_no IS NULL     THEN 'Unknown'
-             WHEN al.cycle_no < 1         THEN '1'
-             WHEN al.cycle_no >= 5        THEN '5 +'
+        CASE WHEN al.cycle_no IS NULL THEN 'Unknown'
+             WHEN al.cycle_no >= 5    THEN '5 +'
              ELSE al.cycle_no::int::text END AS cycle_band,
 
         CASE al.repay_freq WHEN '1' THEN 'Monthly' WHEN '7' THEN 'Weekly'
              ELSE coalesce(al.repay_freq, 'Unknown') END AS repay_freq_label,
-
-        -- LOAN PURPOSE — one label per purpose.
-        -- The source column mixes case, underscores and numeric prefixes, so the
-        -- same purpose was landing on up to three separate rows: AGRICULTURE /
-        -- 1_AGRICULTURE / 'Agri and AgriAllied', BUSINESS / Business /
-        -- 7_BUSINESS, LIVESTOCK / 2_LIVESTOCK, EDUCATION / Education. Normalise
-        -- first (strip the numeric prefix, underscores to spaces, upper), then
-        -- map synonyms explicitly — no fuzzy matching, so a new source value
-        -- shows up as itself rather than being silently absorbed.
-        CASE regexp_replace(upper(replace(coalesce(al.purpose,'UNKNOWN'), '_', ' ')),
-                            '^[0-9]+\s*', '')
-             WHEN 'AGRICULTURE'                 THEN 'Agriculture'
-             WHEN 'AGRI AND AGRIALLIED'         THEN 'Agriculture'
-             WHEN 'LIVESTOCK'                   THEN 'Livestock'
-             WHEN 'BUSINESS'                    THEN 'Business'
-             WHEN 'TRADING'                     THEN 'Trading'
-             WHEN 'SERVICE'                     THEN 'Service'
-             WHEN 'PRODUCTION'                  THEN 'Production'
-             WHEN 'TRANSPORTATION'              THEN 'Transportation'
-             WHEN 'PURCHASE OF BUSINESS ASSETS' THEN 'Business Assets'
-             WHEN 'CAPEX'                       THEN 'Business Assets'
-             WHEN 'HOUSE REPAIRING'             THEN 'Housing & Repair'
-             WHEN 'HOUSING REPAIR'              THEN 'Housing & Repair'
-             WHEN 'CONSTRUCTION'                THEN 'Housing & Repair'
-             WHEN 'SANITATION'                  THEN 'Sanitation'
-             WHEN 'EDUCATION'                   THEN 'Education'
-             WHEN 'HEALTH'                      THEN 'Health'
-             WHEN 'SOCIAL EVENT'                THEN 'Social Event'
-             WHEN 'DEBT REDEMPTION'             THEN 'Debt Redemption'
-             -- A test value in live data. Named for what it is instead of
-             -- sitting in the list looking like a purpose.
-             WHEN 'DJTDEMO'                     THEN 'Unknown / Test'
-             WHEN 'UNKNOWN'                     THEN 'Unknown / Test'
-             ELSE initcap(regexp_replace(
-                     upper(replace(al.purpose, '_', ' ')), '^[0-9]+\s*', ''))
-        END AS purpose_label,
 
         CASE upper(al.caste) WHEN 'GEN' THEN 'General'  WHEN 'MIN' THEN 'Minority'
                              WHEN 'OBC' THEN 'OBC'      WHEN 'SC'  THEN 'Scheduled Castes'
@@ -261,8 +350,6 @@ labelled AS (
     LEFT JOIN wo_master w ON w.loan_id   = al.loan_id
 ),
 
--- One row per (loan, cut). cut_rank drives display order so bands never sort
--- alphabetically ("1 - 12 M" before "> 36 M").
 cuts AS (
     SELECT l.*, c.cut_type, c.cut_value, c.cut_rank
     FROM labelled l
@@ -288,7 +375,7 @@ cuts AS (
                   WHEN '1,01,000 - 1,50,000' THEN 5 WHEN '1,51,000 - 2,00,000' THEN 6
                   WHEN '2,01,000 - 3,00,000' THEN 7 WHEN '3,01,000 - 5,00,000' THEN 8
                   WHEN '5,01,000 - 10,00,000' THEN 9 ELSE 10 END),
-        ('Loan Purpose',      l.purpose_label, 0),
+        ('Loan Purpose',      coalesce(l.purpose, 'Unknown'), 0),
         ('Cycle',             l.cycle_band,
              CASE l.cycle_band WHEN '5 +' THEN 5 WHEN 'Unknown' THEN 9
                   ELSE l.cycle_band::int END),
@@ -305,13 +392,9 @@ SELECT
     max(c.cut_rank)                           AS cut_rank,
     c.business_segment,
     c.loan_status,
-    c.cluster_name, c.region_name, c.area_name, c.branch_name,
-    c.branch_id,
-    coalesce(c.lo_id, 'N/A')                  AS lo_id,
-    c.state_id, c.district_id,
+    c.cluster_name, c.region_name, c.area_name, c.branch_name, c.branch_id,
+    c.lo_id, c.state_id, c.district_id,
 
-    -- LIVE BOOK — # loans and POS by DPD bucket. Write-offs are excluded from
-    -- these by loan_status, exactly as the Excl-W/O view works elsewhere.
     count(*) FILTER (WHERE c.dpd = 0)                                  AS n_regular,
     count(*) FILTER (WHERE c.dpd BETWEEN   1 AND  30)                  AS n_1_30,
     count(*) FILTER (WHERE c.dpd BETWEEN  31 AND  60)                  AS n_31_60,
@@ -330,22 +413,12 @@ SELECT
     round(sum(c.pos) FILTER (WHERE c.dpd > 360)::numeric, 2)               AS pos_360_plus,
     round(sum(c.pos)::numeric, 2)                                          AS pos_total,
 
-    -- PAR numerators. Percentages are derived in the backend from these sums so
-    -- they stay correct under any grouping (a ratio cannot be summed).
     round(sum(c.pos) FILTER (WHERE c.dpd >=  1)::numeric, 2)               AS par0_pos,
     round(sum(c.pos) FILTER (WHERE c.dpd >  30)::numeric, 2)               AS par30_pos,
     round(sum(c.pos) FILTER (WHERE c.dpd >  90)::numeric, 2)               AS par90_pos,
-    -- par60_pos exists because the Excel sheet's "PAR > 90 %" column is
-    -- arithmetically POS in 61-90 and above over total POS, i.e. DPD > 60.
-    -- Checked against sheet 28's own printed buckets on 2026-08-07: IEL prints
-    -- 3.80%, and (1,895,109 + 5,104,207 + 2,895,270) / 260,365,636 = 3.80%,
-    -- while a true DPD > 90 gives 3.07%. JLG prints 1.17% and DPD > 60 gives
-    -- 1.17% against 1.05% for DPD > 90. par90_pos is the literal PAR > 90;
-    -- par60_pos reproduces the Excel column. Both are stored so switching
-    -- between them is a display choice, not a pipeline rebuild.
     round(sum(c.pos) FILTER (WHERE c.dpd >  60)::numeric, 2)               AS par60_pos,
 
-    -- WRITE-OFF IN LAST 3 MONTHS — separate universe, same cut value.
+    -- The three calendar months ending at {as_on}, not ending today.
     count(*) FILTER (WHERE c.wo_date >= (SELECT wo_from FROM anchor))      AS wo3m_count,
     round(coalesce(sum(c.wo_amount) FILTER (
              WHERE c.wo_date >= (SELECT wo_from FROM anchor)), 0)::numeric, 2) AS wo3m_amount

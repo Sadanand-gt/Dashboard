@@ -13,6 +13,9 @@ import Button from '@mui/material/Button'
 import ToggleButton from '@mui/material/ToggleButton'
 import ToggleButtonGroup from '@mui/material/ToggleButtonGroup'
 import Tooltip from '@mui/material/Tooltip'
+import Select from '@mui/material/Select'
+import MenuItem from '@mui/material/MenuItem'
+import FormControl from '@mui/material/FormControl'
 import {
   BarChart, Bar, XAxis, YAxis, Tooltip as RTooltip, ResponsiveContainer,
   CartesianGrid, Legend, Cell, ReferenceLine, LabelList,
@@ -66,7 +69,7 @@ const EXPORT_COLS: [string, string][] = [
   ['pos_61_90', 'POS 61-90'], ['pos_91_180', 'POS 91-180'], ['pos_181_360', 'POS 181-360'],
   ['pos_360_plus', 'POS 360+'], ['pos_total', 'POS Total'],
   ['par0_pct', 'PAR>0 %'], ['par30_pct', 'PAR>30 %'],
-  ['par90_pct', 'PAR>90 %'], ['par60_pct', 'PAR>60 %'],
+  ['par60_pct', 'PAR>60 %'], ['par90_pct', 'PAR>90 %'],
   ['wo3m_count', 'Write-off 3M #'], ['wo3m_amount', 'Write-off 3M Rs'],
 ]
 
@@ -80,12 +83,31 @@ const SUM_FIELDS = [
 
 type Row = Record<string, any>
 
+/** Periods the report can be read at. Month-ends come from the stored history;
+ *  an FY carries the month-end its label resolves to, and `partial` marks an FY
+ *  still in progress (no close yet, so it shows its latest stored month). */
+interface PeriodsResp {
+  months: { value: string; label: string }[]
+  fys: { value: string; label: string; partial: boolean; as_on_label: string; months: number }[]
+  live_date: string | null
+}
+
 export function PortfolioCuts() {
   const slicer = useSlicerParams()
   const [cut, setCut] = useState('Business Segment')
   const [portfolio, setPortfolio] = useState<'without' | 'with'>('without')
   const [measure, setMeasure] = useState<'pos' | 'n'>('pos')
-  const [showCharts, setShowCharts] = useState(true)
+  const [showCharts, setShowCharts] = useState(false)  // charts opt-in, as on every page
+  // AS ON — 'live' is the current book (T-1); anything else is a stored
+  // month-end. An FY resolves to its CLOSING month-end, because POS and DPD
+  // buckets are balances at a point in time: there is no meaningful way to
+  // average a stock report over twelve months.
+  const [asOn, setAsOn] = useState('live')
+
+  const { data: periods } = useQuery<PeriodsResp>({
+    queryKey: ['portfolio-cuts-periods'],
+    queryFn: () => api.get('/api/portfolio-cuts/periods').then((r) => r.data),
+  })
 
   // Excel's sheets are two-level pivots: Business Segment down the side with the
   // cut nested under it (verified against sheets 29-39, which carry
@@ -96,6 +118,7 @@ export function PortfolioCuts() {
   const params = {
     ...slicer, group_by: 'business_segment', pick: cut, portfolio,
     ...(nested ? { group_by_2: 'cut_value' } : {}),
+    ...(asOn !== 'live' ? { as_on: asOn } : {}),
   }
   const { data, isLoading } = useQuery({
     queryKey: ['portfolio-cuts', params],
@@ -200,9 +223,44 @@ export function PortfolioCuts() {
         <Box sx={{ display: 'flex', alignItems: 'baseline', gap: 1.5,
                    flexWrap: 'wrap', mb: 1 }}>
           <Box sx={{ fontSize: '1.2rem', fontWeight: 700, color: INK }}>Portfolio Cuts</Box>
-          <Box sx={{ fontSize: '0.75rem', color: MUTED }}>
-            as of {data?.as_of ?? '—'}
+          {/* The whole page follows this — cards, table and export alike — so a
+              downloaded file can never disagree with what is on screen. */}
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.7 }}>
+            <Box sx={{ fontSize: '0.6rem', color: MUTED, fontWeight: 700,
+                       textTransform: 'uppercase', letterSpacing: '0.07em' }}>As on</Box>
+            <FormControl size="small">
+              <Select value={asOn} onChange={(e) => setAsOn(e.target.value)}
+                sx={{ fontSize: '0.74rem', height: 28, minWidth: 172,
+                      fontWeight: asOn === 'live' ? 400 : 700,
+                      '& .MuiOutlinedInput-notchedOutline': { borderColor: 'rgba(0,0,0,0.15)' } }}>
+                <MenuItem value="live" sx={{ fontSize: '0.74rem' }}>
+                  Live &mdash; {periods?.live_date ?? 'T-1'}
+                </MenuItem>
+                {(periods?.fys ?? []).map((f) => (
+                  <MenuItem key={`fy-${f.value}`} value={f.value} sx={{ fontSize: '0.74rem' }}>
+                    {f.label}{f.partial ? ` (to ${f.as_on_label})` : ` · ${f.as_on_label}`}
+                  </MenuItem>
+                ))}
+                {(periods?.months ?? []).map((m) => (
+                  <MenuItem key={m.value} value={m.value} sx={{ fontSize: '0.74rem' }}>
+                    {m.label}
+                  </MenuItem>
+                ))}
+              </Select>
+            </FormControl>
           </Box>
+          <Box sx={{ fontSize: '0.75rem', color: MUTED }}>{data?.as_of ?? '—'}</Box>
+          {/* Month-ends are REBUILT from repayment history, not a copy of a past
+              daily run, so they read a fraction below the live report. Said out
+              loud rather than left for someone to discover in a reconciliation. */}
+          {asOn !== 'live' && (
+            <Tooltip placement="bottom" title="Rebuilt from repayment history at this month-end: POS is disbursed-less-repaid and DPD is recomputed from cash vs due. The live report reads the core system's own balance, so the two differ by roughly 0.2% on POS at the same date.">
+              <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.5, background: '#EFF6FF',
+                         border: '1px solid #BFDBFE', borderRadius: 5, px: 1.1, py: 0.25, cursor: 'default' }}>
+                <Box sx={{ fontSize: '0.66rem', fontWeight: 700, color: '#1E40AF' }}>historical snapshot</Box>
+              </Box>
+            </Tooltip>
+          )}
           <Box sx={{ flex: 1 }} />
           <Box sx={{ display: 'flex', gap: 1.25, alignItems: 'center', flexWrap: 'wrap' }}>
             <ToggleButtonGroup size="small" exclusive value={portfolio}
@@ -220,7 +278,8 @@ export function PortfolioCuts() {
               {showCharts ? 'Hide charts' : 'Show charts'}
             </Button>
             <ExportCsvButton rows={exportRows} columns={EXPORT_COLS}
-              filename={`portfolio_cuts_${cut.replace(/\s+/g, '_').toLowerCase()}`} />
+              filename={`portfolio_cuts_${cut.replace(/\s+/g, '_').toLowerCase()}`
+                        + (asOn === 'live' ? '' : `_as_on_${asOn}`)} />
           </Box>
         </Box>
         <Box sx={{ display: 'flex', gap: 0.6, flexWrap: 'wrap' }}>
@@ -349,11 +408,15 @@ export function PortfolioCuts() {
                 <TableCell align="right" sx={{ fontWeight: 700, fontSize: '0.7rem' }}>₹ Total Cr</TableCell>
                 <TableCell align="right" sx={{ fontWeight: 700, fontSize: '0.7rem' }}>PAR&gt;0 %</TableCell>
                 <TableCell align="right" sx={{ fontWeight: 700, fontSize: '0.7rem' }}>PAR&gt;30 %</TableCell>
-                <Tooltip title="DPD > 90. The Excel sheet's PAR>90 column is arithmetically DPD > 60; that figure is the next column." placement="top">
-                  <TableCell align="right" sx={{ fontWeight: 700, fontSize: '0.7rem' }}>PAR&gt;90 %</TableCell>
-                </Tooltip>
+                {/* Ascending DPD order — PAR>0, >30, >60, >90. The columns used to
+                    run >90 before >60 to sit the Excel-parity figure last; that put
+                    a wider bucket after a narrower one and read as an error. The
+                    Excel caveat now lives in the tooltips instead of the ordering. */}
                 <Tooltip title="DPD > 60 — reproduces the Excel sheet's PAR>90 column" placement="top">
                   <TableCell align="right" sx={{ fontWeight: 700, fontSize: '0.7rem', color: MUTED }}>PAR&gt;60 %</TableCell>
+                </Tooltip>
+                <Tooltip title="DPD > 90. The Excel sheet's PAR>90 column is arithmetically DPD > 60; that figure is the previous column." placement="top">
+                  <TableCell align="right" sx={{ fontWeight: 700, fontSize: '0.7rem' }}>PAR&gt;90 %</TableCell>
                 </Tooltip>
                 <TableCell align="right" sx={{ fontWeight: 700, fontSize: '0.7rem', borderLeft: `1px solid ${LINE}` }}>W/O 3M #</TableCell>
                 <TableCell align="right" sx={{ fontWeight: 700, fontSize: '0.7rem' }}>W/O 3M ₹ Cr</TableCell>
@@ -386,8 +449,8 @@ export function PortfolioCuts() {
                   <TableCell align="right" sx={{ fontSize: '0.75rem', fontWeight: 700 }}>{fmtCr(r.pos_total ?? 0)}</TableCell>
                   <TableCell align="right" sx={{ fontSize: '0.75rem' }}>{fmtPct(r.par0_pct)}</TableCell>
                   <TableCell align="right" sx={{ fontSize: '0.75rem' }}>{fmtPct(r.par30_pct)}</TableCell>
-                  <TableCell align="right" sx={{ fontSize: '0.75rem' }}>{fmtPct(r.par90_pct)}</TableCell>
                   <TableCell align="right" sx={{ fontSize: '0.75rem', color: MUTED }}>{fmtPct(r.par60_pct)}</TableCell>
+                  <TableCell align="right" sx={{ fontSize: '0.75rem' }}>{fmtPct(r.par90_pct)}</TableCell>
                   <TableCell align="right" sx={{ fontSize: '0.75rem', borderLeft: `1px solid ${LINE}` }}>{fmtN(r.wo3m_count ?? 0)}</TableCell>
                   <TableCell align="right" sx={{ fontSize: '0.75rem' }}>{fmtCr(r.wo3m_amount ?? 0)}</TableCell>
                 </TableRow>
@@ -410,8 +473,8 @@ export function PortfolioCuts() {
                   <TableCell align="right" sx={{ fontSize: '0.75rem', fontWeight: 800 }}>{fmtCr(subtotal.pos_total ?? 0)}</TableCell>
                   <TableCell align="right" sx={{ fontSize: '0.75rem', fontWeight: 700 }}>{fmtPct(subtotal.par0_pct)}</TableCell>
                   <TableCell align="right" sx={{ fontSize: '0.75rem', fontWeight: 700 }}>{fmtPct(subtotal.par30_pct)}</TableCell>
-                  <TableCell align="right" sx={{ fontSize: '0.75rem', fontWeight: 700 }}>{fmtPct(subtotal.par90_pct)}</TableCell>
                   <TableCell align="right" sx={{ fontSize: '0.75rem', fontWeight: 700, color: MUTED }}>{fmtPct(subtotal.par60_pct)}</TableCell>
+                  <TableCell align="right" sx={{ fontSize: '0.75rem', fontWeight: 700 }}>{fmtPct(subtotal.par90_pct)}</TableCell>
                   <TableCell align="right" sx={{ fontSize: '0.75rem', fontWeight: 700, borderLeft: `1px solid ${LINE}` }}>{fmtN(subtotal.wo3m_count ?? 0)}</TableCell>
                   <TableCell align="right" sx={{ fontSize: '0.75rem', fontWeight: 700 }}>{fmtCr(subtotal.wo3m_amount ?? 0)}</TableCell>
                 </TableRow>,
@@ -431,12 +494,12 @@ export function PortfolioCuts() {
                     <TableCell align="right" sx={{ fontSize: '0.75rem', fontWeight: 700 }}>{fmtCr(r.pos_total ?? 0)}</TableCell>
                     <TableCell align="right" sx={{ fontSize: '0.75rem' }}>{fmtPct(r.par0_pct)}</TableCell>
                     <TableCell align="right" sx={{ fontSize: '0.75rem' }}>{fmtPct(r.par30_pct)}</TableCell>
+                    <TableCell align="right" sx={{ fontSize: '0.75rem', color: MUTED }}>{fmtPct(r.par60_pct)}</TableCell>
                     <TableCell align="right" sx={{ fontSize: '0.75rem',
                       color: (r.par90_pct ?? 0) > (grand.par90_pct ?? 0) ? '#DC2626' : 'inherit',
                       fontWeight: (r.par90_pct ?? 0) > (grand.par90_pct ?? 0) ? 700 : 400 }}>
                       {fmtPct(r.par90_pct)}
                     </TableCell>
-                    <TableCell align="right" sx={{ fontSize: '0.75rem', color: MUTED }}>{fmtPct(r.par60_pct)}</TableCell>
                     <TableCell align="right" sx={{ fontSize: '0.75rem', borderLeft: `1px solid ${LINE}` }}>{fmtN(r.wo3m_count ?? 0)}</TableCell>
                     <TableCell align="right" sx={{ fontSize: '0.75rem' }}>{fmtCr(r.wo3m_amount ?? 0)}</TableCell>
                   </TableRow>
@@ -458,8 +521,8 @@ export function PortfolioCuts() {
                   <TableCell align="right" sx={{ fontSize: '0.75rem', fontWeight: 800 }}>{fmtCr(grand.pos_total ?? 0)}</TableCell>
                   <TableCell align="right" sx={{ fontSize: '0.75rem', fontWeight: 800 }}>{fmtPct(grand.par0_pct)}</TableCell>
                   <TableCell align="right" sx={{ fontSize: '0.75rem', fontWeight: 800 }}>{fmtPct(grand.par30_pct)}</TableCell>
-                  <TableCell align="right" sx={{ fontSize: '0.75rem', fontWeight: 800 }}>{fmtPct(grand.par90_pct)}</TableCell>
                   <TableCell align="right" sx={{ fontSize: '0.75rem', fontWeight: 800, color: MUTED }}>{fmtPct(grand.par60_pct)}</TableCell>
+                  <TableCell align="right" sx={{ fontSize: '0.75rem', fontWeight: 800 }}>{fmtPct(grand.par90_pct)}</TableCell>
                   <TableCell align="right" sx={{ fontSize: '0.75rem', fontWeight: 800, borderLeft: `1px solid ${LINE}` }}>
                     {fmtN(grand.wo3m_count ?? 0)}
                   </TableCell>
