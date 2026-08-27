@@ -387,6 +387,9 @@ il_loans AS (
         coalesce(la.dpd, 0)                                     AS dpd,
         coalesce(d.dpd, 0)                                      AS eom_dpd,
         coalesce(p.pre_dpd, 0)                                  AS pre_dpd,
+        -- PRINCIPAL + INTEREST arrear, matching aum_status.sql. This is the full
+        -- amount owed; od_to_disb below can therefore exceed 100% on very old
+        -- loans, which is correct rather than a defect.
         coalesce(la.principal_arrear, 0) + coalesce(la.interest_arrear, 0) AS total_arrear,
         CASE WHEN la.status = 'W' OR (w.loan_id IS NOT NULL
                   AND (w.wo_date IS NULL OR la.disbursement_date::date <= w.wo_date))
@@ -427,6 +430,9 @@ jlg_loans AS (
         coalesce(la.dpd, 0)                                     AS dpd,
         coalesce(d.dpd, 0)                                      AS eom_dpd,
         coalesce(p.pre_dpd, 0)                                  AS pre_dpd,
+        -- PRINCIPAL + INTEREST arrear, matching aum_status.sql. This is the full
+        -- amount owed; od_to_disb below can therefore exceed 100% on very old
+        -- loans, which is correct rather than a defect.
         coalesce(la.principal_arrear, 0) + coalesce(la.interest_arrear, 0) AS total_arrear,
         CASE WHEN la.status = 'W' OR (w.loan_id IS NOT NULL
                   AND (w.wo_date IS NULL OR la.disbursement_date::date <= w.wo_date))

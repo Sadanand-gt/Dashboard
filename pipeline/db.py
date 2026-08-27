@@ -8,6 +8,7 @@ import os
 import time
 import logging
 import pandas as pd
+from contextlib import contextmanager
 from urllib.parse import quote_plus
 from sqlalchemy import create_engine, text
 from dotenv import load_dotenv
@@ -83,7 +84,8 @@ def get_cb_engine():
 
 # ── SQL file execution with retry ─────────────────────────────────────────────
 def run_sql_file(filename: str, params: dict = None, subs: dict = None,
-                 max_retries: int = 3, retry_delay: int = 60) -> pd.DataFrame:
+                 max_retries: int = 3, retry_delay: int = 60,
+                 conn=None) -> pd.DataFrame:
     """
     Read a .sql file and execute against PostgreSQL.
     Auto-retries on replica conflict (error 40001) up to max_retries times.
@@ -91,6 +93,12 @@ def run_sql_file(filename: str, params: dict = None, subs: dict = None,
     subs: optional {placeholder: text} map for literal string substitution into
     the SQL before execution (e.g. injecting a large id list as an array literal).
     Use only with trusted, internally-generated values.
+
+    conn: optional existing connection to execute on. Used by snapshot_connection()
+    so that a report and its loan-grain child read the SAME database snapshot — see
+    that function. Retries are skipped when a connection is supplied, because a
+    retry inside a REPEATABLE READ transaction would re-read the same aborted
+    snapshot; the caller decides what to do instead.
     """
     filepath = os.path.join(QUERY_DIR, filename)
     if not os.path.exists(filepath):
@@ -102,6 +110,11 @@ def run_sql_file(filename: str, params: dict = None, subs: dict = None,
     if subs:
         for key, val in subs.items():
             sql = sql.replace("{" + key + "}", val)
+
+    if conn is not None:
+        df = pd.read_sql_query(text(sql), conn, params=params)
+        log.info(f"    DB OK (shared snapshot) — {len(df)} rows returned")
+        return df
 
     engine = _get_engine()
     last_error = None
@@ -158,6 +171,47 @@ def run_sql_file(filename: str, params: dict = None, subs: dict = None,
 
 
 # ── Raw query helper ──────────────────────────────────────────────────────────
+@contextmanager
+def snapshot_connection():
+    """One REPEATABLE READ transaction that several reports can share.
+
+    WHY THIS EXISTS
+        A loan-grain export copies its parent report's CTEs verbatim, so the two
+        can never disagree on LOGIC. But they are two separate executions against a
+        live read replica, and in a full pipeline run they are minutes apart
+        (aum_status is 2nd in REPORTS, aum_loans ~14th). Anything that replicates
+        in between lands in one table and not the other.
+
+        That is not hypothetical: on 2026-08-18 rpt_aum_status held 92,788 loans
+        Excl W/O while rpt_aum_loans held 92,797 — 9 loans apart on the SAME
+        report_day, so the page and its CSV export disagreed.
+
+        Under REPEATABLE READ every statement in the transaction sees the snapshot
+        taken at the first one, so parent and child read identical data.
+
+    CAVEAT — a long transaction on a hot standby is more exposed to
+    "canceling statement due to conflict with recovery". The caller must be ready
+    to fall back to running the reports separately; see run_snapshot_group().
+    """
+    engine = _get_engine()
+    conn = engine.connect()
+    try:
+        conn.execution_options(isolation_level="REPEATABLE READ")
+        trans = conn.begin()
+        try:
+            yield conn
+            trans.rollback()          # read-only; nothing to commit
+        except Exception:
+            trans.rollback()
+            raise
+    finally:
+        conn.close()
+        try:
+            engine.dispose()
+        except Exception:
+            pass
+
+
 def run_query(sql: str, params: dict = None) -> pd.DataFrame:
     engine = _get_engine()
     with engine.connect() as conn:

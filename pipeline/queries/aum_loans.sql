@@ -1,4 +1,18 @@
 -- =============================================================================
+-- Current Outstanding — LOAN GRAIN  ->  rpt_aum_loans
+--
+-- One row per loan. Feeds the Current Outstanding loan-wise CSV export and the
+-- loan_id lookup (rpt_aum_status is aggregated and has no loan_id, so filtering
+-- it on loan_id was a silent no-op).
+--
+--   RECONCILIATION — must hold after every run:
+--     loan_status IN ('Active','Death')             = Current Outstanding Excl W/O
+--     loan_status IN ('Active','Death','Write-off') = Current Outstanding With W/O
+--
+-- The CTE block below is GENERATED from aum_status.sql. See gen_loan_grain.py.
+-- report_day is NOT selected here; pg_write_report_day stamps it on write.
+-- =============================================================================
+-- =============================================================================
 -- Report  : Current Status (AUM)
 -- DPD     : Computed EOM DPD (end of previous month)
 --           cumulative_principal_due / cumulative_interest_due from stored cols.
@@ -636,98 +650,91 @@ bucketed AS (
     FROM all_loans al
 )
 
--- ─────────────────────────────────────────────────────────────────────────────
--- FINAL AGGREGATION
--- ─────────────────────────────────────────────────────────────────────────────
+-- ===========================================================================
+-- LOAN-GRAIN PROJECTION — hand-maintained.
+-- EVERYTHING ABOVE THIS LINE IS GENERATED from the parent query by
+-- pipeline/gen_loan_grain.py. Do not hand-edit it; edit the parent and
+-- regenerate. Everything below is this file's own and is preserved.
+-- ===========================================================================
 SELECT
-    current_date                                    AS as_of_date,
+    (current_date - 1)                              AS data_date,
+    b.loan_id,
     b.loan_source,
     b.business_segment,
-    b.curr_od_status,
-    -- Write-off wins over Closed: a written-off loan that closed this month is
-    -- still a write-off (deep-NPA settlement), NOT a healthy 'Regularised' move.
-    -- The LIVE book is protected by the open_now flag below (live-book reports
-    -- filter open_now IS TRUE), so this no longer inflates live Write-off counts.
+    -- identical CASE to aum_status: write-off wins over a current-month closure
     CASE
         WHEN b.raw_status = 'W'        THEN 'Write-off'
-        WHEN NOT b.open_now            THEN 'Closed'   -- movement-only closure
+        WHEN NOT b.open_now            THEN 'Closed'
         WHEN b.raw_status = 'A'        THEN 'Active'
         WHEN b.raw_status IN ('D','I') THEN 'Death'
         ELSE b.raw_status
     END                                             AS loan_status,
-    -- TRUE = in the LIVE active book (open as of the data date). Live-book reports
-    -- (Current Outstanding / Ageing / exec summary) filter on this; the movement
-    -- reports ignore it so current-month closures stay in the month-end portfolio.
-    b.open_now                                      AS open_now,
+    b.open_now,
+    b.dpd,
     b.dpd_bucket,
-    b.prev_dpd_bucket,
-    b.curr_dpd_bucket,
-    b.od_movement_status,
+    b.curr_od_status,
     b.bucket_movement,
+    round(coalesce(b.pos, 0)::numeric, 2)               AS pos,
+    round(coalesce(b.total_arrear, 0)::numeric, 2)      AS total_arrear,
+    b.disbursement_date::date                           AS disbursement_date,
+    round(coalesce(b.sanctioned_amount, 0)::numeric, 2) AS total_loan_amount,
     coalesce(h.zone_name,    'Unassigned')          AS zone_name,
     coalesce(h.cluster_name, 'Unassigned')          AS cluster_name,
     coalesce(h.region_name,  'Unassigned')          AS region_name,
     coalesce(h.area_name,    'Unassigned')          AS area_name,
     coalesce(h.branch_name,  'Unassigned')          AS branch_name,
     b.branch_id,
-    coalesce(b.lo_id,              'N/A')            AS lo_id,
-    -- ── Display labels: "<id> - <NAME>" ──────────────────────────────────────
-    -- Matches the reference convention (S.Incentive notebook builds branch/area/
-    -- region/cluster/zone the same way; the Excel slicer is "BRANCH ID & NAME").
-    -- These are DISPLAY-ONLY, kept separate from the plain *_name columns above,
-    -- which carry the access-control scope values (core/scope.py) and the shared
-    -- slicer values used by every other report — those must not change format.
     coalesce(h.zone_id::text   || ' - ' || h.zone_name,    'Unassigned') AS zone_label,
     coalesce(h.cluster_id::text|| ' - ' || h.cluster_name, 'Unassigned') AS cluster_label,
     coalesce(h.region_id::text || ' - ' || h.region_name,  'Unassigned') AS region_label,
     coalesce(h.area_id::text   || ' - ' || h.area_name,    'Unassigned') AS area_label,
     coalesce(b.branch_id::text || ' - ' || h.branch_name,  'Unassigned') AS branch_label,
-    coalesce(b.prod_classification,'Other')         AS prod_classification,
+    coalesce(b.lo_id, 'N/A')                        AS lo_id,
+    coalesce(b.prod_classification, 'Other')        AS prod_classification,
     coalesce(h.state_id::text,   'N/A')             AS state_id,
     coalesce(h.district_id::text,'N/A')             AS district_id,
-    coalesce(b.cycle_no,         'N/A')             AS cycle_no,
-    coalesce(b.disb_year,        'N/A')             AS disb_year,
-    coalesce(b.purpose_id,       'N/A')             AS purpose_id,
-    coalesce(b.facility_id,      'N/A')             AS facility_id,
-    coalesce(b.lender_id,        'N/A')             AS lender_id,
-    coalesce(b.caste,            'N/A')             AS caste,
-    coalesce(b.religion,         'N/A')             AS religion,
-    (SELECT prev_month_end FROM ref)                AS dpd_as_of,
-    -- Was the loan in the PREV month-end portfolio (disbursed on/before 30-Jun)?
-    -- The movement reports (OD Status / Bucket Movement) keep only these rows, so
-    -- current-month disbursals — which have no month-end demand and can't be OD —
-    -- are excluded, while current-month closures (also disbursed <= 30-Jun) stay.
-    -- ::date is REQUIRED: disbursement_date is a TIMESTAMP and prev_month_end a DATE,
-    -- so an uncast compare silently drops loans disbursed ON the month-end at any
-    -- time past midnight (IL carries a real time-of-day; JLG is always 00:00:00).
-    (b.disbursement_date::date <= (SELECT prev_month_end FROM ref)) AS onbook_prev_eom,
+    coalesce(b.disb_year,   'N/A')                  AS disb_year,
+    coalesce(b.cycle_no,    'N/A')                  AS cycle_no,
+    coalesce(b.purpose_id,  'N/A')                  AS purpose_id,
+    coalesce(b.facility_id, 'N/A')                  AS facility_id,
+    coalesce(b.lender_id,   'N/A')                  AS lender_id,
+    coalesce(b.caste,       'N/A')                  AS caste,
+    coalesce(b.religion,    'N/A')                  AS religion,
 
-    count(b.loan_id)                                AS loan_count,
-    round(sum(b.pos)::numeric,              2)      AS total_pos,
-    -- POS at the PREVIOUS month-end — the denominator Bucket Movement / OD Status
-    -- are stated in ("POS [Previous Month]" in the Excel sheet). Ties the trend
-    -- engine's pos_eom for the same month-end.
-    round(sum(b.prev_pos)::numeric,         2)      AS prev_pos,
-    round(sum(b.sanctioned_amount)::numeric, 2)     AS total_sanctioned,
-    round(sum(b.total_arrear)::numeric,     2)      AS total_arrear,
-    round(sum(b.par0_pos)::numeric,  2)             AS par0_pos,
-    round(sum(b.par30_pos)::numeric, 2)             AS par30_pos,
-    round(sum(b.par60_pos)::numeric, 2)             AS par60_pos,
-    round(sum(b.par90_pos)::numeric, 2)             AS par90_pos,
-    round(sum(b.writeoff_pos)::numeric, 2)          AS writeoff_pos
-
+    -- ── Columns below exist so rpt_aum_status can be DERIVED from this grain ──
+    -- They are every remaining GROUP BY key and measure of aum_status.sql's final
+    -- aggregation. With them present, aggregating this result reproduces
+    -- rpt_aum_status exactly, from ONE query and therefore ONE snapshot — which
+    -- is what stops the page and its CSV export drifting apart (they were 9 loans
+    -- apart on 2026-08-18).
+    -- They are NOT written to rpt_aum_loans (the runner drops them before the
+    -- write), so no DDL is required and that table's schema is unchanged.
+    -- status_code is the SOURCE status verbatim (A / D / I / W / ...), kept
+    -- alongside the derived loan_status. loan_status folds BOTH 'D' and 'I' into
+    -- 'Death', so without this the two are indistinguishable once aggregated —
+    -- and any rebuild that groups on visible columns silently merges them.
+    -- It also separates the two death stages, which are operationally different:
+    -- 'D' = death case open, claim NOT yet filed (28 loans, Rs 7.01 L still
+    -- outstanding); 'I' = claim filed with the insurer, principal already cleared
+    -- (57 loans, Rs 0). Measured 2026-08-20 against ananya_data.death_master,
+    -- where claim_to_insurer_date is populated on 0/28 'D' and 57/57 'I'.
+    -- NOT prefixed agg_, so it IS written to rpt_aum_loans.
+    b.raw_status                                    AS status_code,
+    b.prev_dpd_bucket                               AS agg_prev_dpd_bucket,
+    b.curr_dpd_bucket                               AS agg_curr_dpd_bucket,
+    b.od_movement_status                            AS agg_od_movement_status,
+    (b.disbursement_date::date <= (SELECT prev_month_end FROM ref)) AS agg_onbook_prev_eom,
+    (SELECT prev_month_end FROM ref)                AS agg_dpd_as_of,
+    coalesce(h.zone_id::text,    '')                AS agg_zone_id,
+    coalesce(h.cluster_id::text, '')                AS agg_cluster_id,
+    coalesce(h.region_id::text,  '')                AS agg_region_id,
+    coalesce(h.area_id::text,    '')                AS agg_area_id,
+    round(coalesce(b.prev_pos,     0)::numeric, 2)  AS agg_prev_pos,
+    round(coalesce(b.par0_pos,     0)::numeric, 2)  AS agg_par0_pos,
+    round(coalesce(b.par30_pos,    0)::numeric, 2)  AS agg_par30_pos,
+    round(coalesce(b.par60_pos,    0)::numeric, 2)  AS agg_par60_pos,
+    round(coalesce(b.par90_pos,    0)::numeric, 2)  AS agg_par90_pos,
+    round(coalesce(b.writeoff_pos, 0)::numeric, 2)  AS agg_writeoff_pos
 FROM bucketed b
 LEFT JOIN hierarchy h ON b.branch_id = h.branch_id
-GROUP BY
-    b.loan_source, b.business_segment, b.curr_od_status,
-    b.raw_status, b.open_now, (b.disbursement_date::date <= (SELECT prev_month_end FROM ref)),
-    b.dpd_bucket, b.prev_dpd_bucket, b.curr_dpd_bucket, b.od_movement_status, b.bucket_movement,
-    h.zone_name, h.cluster_name, h.region_name, h.area_name, h.branch_name,
-    h.zone_id, h.cluster_id, h.region_id, h.area_id,
-    b.branch_id, b.lo_id, b.prod_classification,
-    h.state_id, h.district_id,
-    b.cycle_no, b.disb_year,
-    b.purpose_id, b.facility_id, b.lender_id, b.caste, b.religion
-ORDER BY
-    b.business_segment, b.dpd_bucket,
-    h.zone_name, h.cluster_name, h.region_name, h.area_name, h.branch_name;
+ORDER BY b.loan_id;

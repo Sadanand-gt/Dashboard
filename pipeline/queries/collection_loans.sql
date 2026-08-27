@@ -1,4 +1,31 @@
 -- =============================================================================
+-- Collection — LOAN GRAIN  ->  rpt_collection_loans
+--
+-- One row per loan with a T-1 or MTD demand OR receipt. Feeds the loan-wise CSV
+-- export on the T-1 and MTD Collection pages, and the loan_id lookup.
+--
+--   RECONCILIATION — must hold after every run:
+--     sum(ftod_flag)      = rpt_collection.mtd_ftod
+--     sum(t1_ontime)      = rpt_collection.t1_ontime
+--     sum(mtd_collection) = rpt_collection.mtd_collection
+--
+-- MEASURE NOTES — do not re-derive downstream:
+--   t1_ontime  CAPPED per loan: least(t1_collection, t1_demand). Total collection
+--     includes arrears against older dues, which is why the uncapped
+--     t1_collection / t1_demand read 110.15% on 2026-08-13.
+--   mtd_ontime  TIMING measure (receipts on/before the loan's last MTD demand
+--     date) that is now ALSO CAPPED per loan at that loan's own demand, matching
+--     t1_ontime. Before the cap it exceeded demand on 1,723 loans (Rs 52.4 L) and
+--     pushed branch-level MTD OTRR over 100% — 5 branches, max 103.40%.
+--     It is NOT least(mtd_collection, mtd_demand): that is the capped CE (93.22%)
+--     and would count loans paying AFTER their due date as on-time.
+--   ftod_flag  first-time OD AND not written off, so it agrees with the OD
+--     Status matrix by construction.
+--
+-- The CTE block below is GENERATED from collection_fact.sql. See gen_loan_grain.py.
+-- report_day is NOT selected here; pg_write_report_day stamps it on write.
+-- =============================================================================
+-- =============================================================================
 -- Report  : Collection Efficiency fact (feeds BOTH "T-1 Collection" & "MTD Collection")
 -- Grain   : one row per unique combination of all analysis-parameter dimensions
 --           (aggregated from loan level).  Both pages read this single table.
@@ -492,89 +519,81 @@ enriched AS (
     FROM all_base b
 )
 
--- ─────────────────────────────────────────────────────────────────────────────
--- FINAL AGGREGATION — one row per dimension combination
--- ─────────────────────────────────────────────────────────────────────────────
+-- ===========================================================================
+-- LOAN-GRAIN PROJECTION — hand-maintained.
+-- EVERYTHING ABOVE THIS LINE IS GENERATED from the parent query by
+-- pipeline/gen_loan_grain.py. Do not hand-edit it; edit the parent and
+-- regenerate. Everything below is this file's own and is preserved.
+-- ===========================================================================
 SELECT
+    (current_date - 1)                              AS data_date,
+    e.loan_id,
     e.loan_source,
     e.business_segment,
-    coalesce(h.zone_name,'Unassigned')    AS zone_name,
-    coalesce(h.cluster_name,'Unassigned') AS cluster_name,
-    coalesce(h.region_name,'Unassigned')  AS region_name,
-    coalesce(h.area_name,'Unassigned')    AS area_name,
-    coalesce(h.branch_name,'Unassigned')  AS branch_name,
-    e.branch_id,
-    coalesce(e.lo_id,'N/A')               AS lo_id,
-    coalesce(h.state_id::text,'N/A')      AS state_id,
-    coalesce(h.district_id::text,'N/A')   AS district_id,
-    e.prod_classification,
-    e.curr_od_status,
+    e.loan_status,
+
+    e.eom_dpd,
+    e.live_dpd,
     e.dpd_bucket,
     e.bucket_movement,
-    e.loan_status,
-    coalesce(e.cycle_no,'N/A')            AS cycle_no,
-    coalesce(e.disb_year,'N/A')           AS disb_year,
-    coalesce(e.purpose_id,'N/A')          AS purpose_id,
-    coalesce(e.facility_id,'N/A')         AS facility_id,
-    coalesce(e.lender_id,'N/A')           AS lender_id,
-    coalesce(e.caste,'N/A')               AS caste,
-    coalesce(e.religion,'N/A')            AS religion,
+    e.ftod_flag,
 
-    count(*)                                        AS loan_count,
-    -- T-1
-    round(sum(e.t1_demand)::numeric,2)              AS t1_demand,
-    round(sum(e.t1_collection)::numeric,2)          AS t1_collection,
-    -- period-specific demand loan counts (loans that actually had demand in the period)
-    sum(CASE WHEN e.t1_demand  > 0 THEN 1 ELSE 0 END) AS t1_demand_count,
-    sum(CASE WHEN e.mtd_demand > 0 THEN 1 ELSE 0 END) AS mtd_demand_count,
-    -- Loans that had a demand on T-1 AND collected against it. Pairs with
-    -- t1_demand_count to give a COUNT-based T-1 OTRR.
-    --
-    -- The amount ratio cannot answer "did yesterday's borrowers pay?": a day's
-    -- receipts include arrears against older dues and advances against future
-    -- ones, so t1_collection / t1_demand reads 105.95% while 263 loans first-time
-    -- slipped. A count ratio is bounded by construction and is the same basis
-    -- the 0-bucket CE uses elsewhere in this dashboard.
-    -- FTOD and OTRR amount logic are untouched.
-    sum(CASE WHEN e.t1_demand > 0 AND e.t1_collection > 0 THEN 1 ELSE 0 END)
-                                                      AS t1_collection_count,
-    -- ON-TIME collection against T-1's own demand, capped PER LOAN.
-    --
-    -- t1_collection is every rupee received on T-1, including arrears against
-    -- older dues and advances against future ones, so t1_collection / t1_demand
-    -- reads 105.95% — over 100% while loans were still slipping. Capping each
-    -- loan at its own T-1 demand answers the question actually being asked:
-    -- of yesterday's demand, how much was met?  OTRR = t1_ontime / t1_demand is
-    -- then bounded by construction.
-    --
-    -- Same shape as mtd_ontime, and the same per-loan capping the CE measures
-    -- use. FTOD is untouched.
-    round(sum(least(e.t1_collection, e.t1_demand))::numeric, 2) AS t1_ontime,
-    -- Fresh-slip flag among loans due on T-1 (same measure as mtd_ftod, so
-    -- FTOD counts sit exclusively in 'Worsened' rows — matches the Excel)
-    sum(CASE WHEN e.t1_demand > 0 THEN e.ftod_flag ELSE 0 END) AS t1_ftod,
-    -- MTD
-    round(sum(e.mtd_demand)::numeric,2)             AS mtd_demand,
-    round(sum(e.mtd_collection)::numeric,2)         AS mtd_collection,
-    round(sum(e.mtd_ontime)::numeric,2)             AS mtd_ontime,
-    sum(e.ftod_flag)                                 AS mtd_ftod,
-    -- PMSD = previous month SAME DAY (T-1 comparison)
-    round(sum(e.pmsd_demand)::numeric,2)            AS pmsd_demand,
-    round(sum(e.pmsd_collection)::numeric,2)        AS pmsd_collection,
-    -- PMTD = previous month TO DATE (MTD comparison)
-    round(sum(e.pmtd_demand)::numeric,2)            AS pmtd_demand,
-    round(sum(e.pmtd_collection)::numeric,2)        AS pmtd_collection,
+    round(coalesce(e.t1_demand, 0)::numeric, 2)     AS t1_demand,
+    round(coalesce(e.t1_collection, 0)::numeric, 2) AS t1_collection,
+    round(least(coalesce(e.t1_collection, 0), coalesce(e.t1_demand, 0))::numeric, 2)
+                                                    AS t1_ontime,
+    round(coalesce(e.mtd_demand, 0)::numeric, 2)    AS mtd_demand,
+    round(coalesce(e.mtd_collection, 0)::numeric, 2) AS mtd_collection,
+    round(coalesce(e.mtd_ontime, 0)::numeric, 2)    AS mtd_ontime,
+    -- no POS on this CTE: collection_fact tracks demand and receipts, not
+    -- balances. Loan-level POS lives in rpt_aum_loans.
 
-    (SELECT yesterday    FROM ref) AS report_date,
-    (SELECT pmsd_cutoff  FROM ref) AS pmsd_date
+    coalesce(h.zone_name,    'Unassigned')          AS zone_name,
+    coalesce(h.cluster_name, 'Unassigned')          AS cluster_name,
+    coalesce(h.region_name,  'Unassigned')          AS region_name,
+    coalesce(h.area_name,    'Unassigned')          AS area_name,
+    coalesce(h.branch_name,  'Unassigned')          AS branch_name,
+    e.branch_id,
+    coalesce(h.zone_id::text   || ' - ' || h.zone_name,    'Unassigned') AS zone_label,
+    coalesce(h.cluster_id::text|| ' - ' || h.cluster_name, 'Unassigned') AS cluster_label,
+    coalesce(h.region_id::text || ' - ' || h.region_name,  'Unassigned') AS region_label,
+    coalesce(h.area_id::text   || ' - ' || h.area_name,    'Unassigned') AS area_label,
+    coalesce(e.branch_id::text || ' - ' || h.branch_name,  'Unassigned') AS branch_label,
+    coalesce(e.lo_id, 'N/A')                        AS lo_id,
 
+    coalesce(e.prod_classification, 'Other')        AS prod_classification,
+    coalesce(h.state_id::text,   'N/A')             AS state_id,
+    coalesce(h.district_id::text,'N/A')             AS district_id,
+
+    -- ── Columns below exist so rpt_collection can be DERIVED from this grain ──
+    -- Every remaining GROUP BY key and measure of collection_fact.sql's final
+    -- aggregation. With them present, aggregating this result reproduces
+    -- rpt_collection from ONE query and therefore ONE snapshot, so the page and
+    -- its CSV export cannot drift apart.
+    -- NOT written to rpt_collection_loans (the runner drops agg_*), so no DDL.
+    coalesce(e.curr_od_status, 'N/A')               AS agg_curr_od_status,
+    coalesce(e.cycle_no,       'N/A')               AS agg_cycle_no,
+    coalesce(e.disb_year,      'N/A')               AS agg_disb_year,
+    coalesce(e.purpose_id,     'N/A')               AS agg_purpose_id,
+    coalesce(e.facility_id,    'N/A')               AS agg_facility_id,
+    coalesce(e.lender_id,      'N/A')               AS agg_lender_id,
+    coalesce(e.caste,          'N/A')               AS agg_caste,
+    coalesce(e.religion,       'N/A')               AS agg_religion,
+    round(coalesce(e.pmsd_demand,     0)::numeric, 2) AS agg_pmsd_demand,
+    round(coalesce(e.pmsd_collection, 0)::numeric, 2) AS agg_pmsd_collection,
+    round(coalesce(e.pmtd_demand,     0)::numeric, 2) AS agg_pmtd_demand,
+    round(coalesce(e.pmtd_collection, 0)::numeric, 2) AS agg_pmtd_collection,
+    (SELECT yesterday   FROM ref)                   AS agg_report_date,
+    (SELECT pmsd_cutoff FROM ref)                   AS agg_pmsd_date
 FROM enriched e
 LEFT JOIN hierarchy h ON e.branch_id = h.branch_id
-GROUP BY
-    e.loan_source, e.business_segment,
-    h.zone_name, h.cluster_name, h.region_name, h.area_name, h.branch_name, e.branch_id,
-    e.lo_id,
-    h.state_id, h.district_id, e.prod_classification, e.curr_od_status, e.dpd_bucket,
-    e.bucket_movement, e.loan_status, e.cycle_no, e.disb_year, e.purpose_id,
-    e.facility_id, e.lender_id, e.caste, e.religion
-ORDER BY e.loan_source, h.zone_name, h.cluster_name, h.region_name, h.area_name, h.branch_name;
+-- NO WHERE CLAUSE HERE — deliberately.
+--   The parent counts EVERY enriched row in loan_count (99,398), including 7,229
+--   loans with no demand and no receipts. Filtering here would make a derived
+--   rpt_collection undercount by exactly those loans.
+--   The export's own filter — keep a loan only if it has demand OR receipts —
+--   is applied by the runner just before writing rpt_collection_loans, so the
+--   exported file is unchanged (92,169 rows) while the aggregate sees everything.
+--   That filter must stay as it is: filtering on demand ALONE previously dropped
+--   Rs 28.4 L of mtd_ontime from loans that paid without a current-month demand.
+ORDER BY e.loan_id;

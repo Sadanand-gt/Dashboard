@@ -11,50 +11,53 @@ Usage:  python -m pipeline.load_writeoff_master
 
 import os
 import sqlite3
-from datetime import date, timedelta
 
-import pyxlsb
+import pandas as pd
 
 BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-XLSB = os.path.join(BASE_DIR, "References", "July, 2026 Dashboards.xlsb")
+# The master is maintained as its own workbook and reissued when it changes.
+# Until 2026-08-12 this read the "Write-off Master" sheet inside
+# "July, 2026 Dashboards.xlsb"; the standalone file supersedes it and carries
+# the same six columns in the same order.
+XLSX = os.path.join(BASE_DIR, "References",
+                    "Write-off Master updated till 11.08.2026 - Up.xlsx")
 SQLITE_PATH = os.path.join(BASE_DIR, "reports.db")
-SHEET = "Write-off Master"
 
-# Excel serial date epoch (Windows): day 1 = 1900-01-01, with the 1900 leap bug
-# → use 1899-12-30 as the base.
-_EXCEL_EPOCH = date(1899, 12, 30)
-
-
-def _excel_date(serial):
-    try:
-        return (_EXCEL_EPOCH + timedelta(days=int(float(serial)))).isoformat()
-    except (TypeError, ValueError):
-        return None
+# Row 1 is the title banner, row 2 the header — so the header is at index 1.
+_HEADER_ROW = 1
+# Positional, not by name: the sheet's headers have been retyped between issues
+# ("Amount Written Off" / "Write off Amount"), but the column ORDER has not moved.
+_COLS = {1: "loan_no", 2: "writeoff_date", 3: "business_segment",
+         4: "writeoff_amount", 5: "final_loan_no"}
 
 
 def load() -> int:
+    df = pd.read_excel(XLSX, header=_HEADER_ROW)
+    df = df.rename(columns={df.columns[i]: name for i, name in _COLS.items()
+                            if i < len(df.columns)})
+
     rows = []
-    with pyxlsb.open_workbook(XLSB) as wb:
-        with wb.get_sheet(SHEET) as sh:
-            for i, row in enumerate(sh.rows()):
-                if i < 2:           # row 1 = title, row 2 = header
-                    continue
-                cells = {c.c: c.v for c in row}
-                loan_no = cells.get(1)          # C1 = Loan No.
-                final_no = cells.get(5)         # C5 = Final Loan No.
-                if loan_no is None and final_no is None:
-                    continue
-                loan_id = final_no if final_no is not None else loan_no
-                try:
-                    loan_id = int(float(loan_id))
-                except (TypeError, ValueError):
-                    continue
-                rows.append({
-                    "loan_id":        loan_id,
-                    "writeoff_date":  _excel_date(cells.get(2)),
-                    "business_segment": (str(cells.get(3)).strip() if cells.get(3) else None),
-                    "writeoff_amount": float(cells.get(4)) if cells.get(4) is not None else 0.0,
-                })
+    for r in df.itertuples(index=False):
+        loan_no = getattr(r, "loan_no", None)
+        final_no = getattr(r, "final_loan_no", None)
+        # "Final Loan No." is the restated id where a loan was re-booked; it wins
+        # when present, exactly as the xlsb loader did.
+        loan_id = final_no if pd.notna(final_no) else loan_no
+        if pd.isna(loan_id):
+            continue
+        try:
+            loan_id = int(float(loan_id))
+        except (TypeError, ValueError):
+            continue
+        wo_date = pd.to_datetime(getattr(r, "writeoff_date", None), errors="coerce")
+        seg = getattr(r, "business_segment", None)
+        amt = getattr(r, "writeoff_amount", None)
+        rows.append({
+            "loan_id":        loan_id,
+            "writeoff_date":  None if pd.isna(wo_date) else wo_date.date().isoformat(),
+            "business_segment": (str(seg).strip() if pd.notna(seg) else None),
+            "writeoff_amount": float(amt) if pd.notna(amt) else 0.0,
+        })
 
     # De-dupe loan_ids CHRONOLOGICALLY and drop the blank placeholder rows.
     #  - loan_id 0 is the sheet's empty-row filler (~19.5k rows, all null-date);
@@ -76,7 +79,6 @@ def load() -> int:
 
     from pipeline.report_store import use_postgres
     if use_postgres():
-        import pandas as pd
         from sqlalchemy import text
         from pipeline.report_store import pg_engine, table_exists
         df = pd.DataFrame(deduped)

@@ -22,8 +22,22 @@ wo_master AS (
     SELECT v.loan_id::bigint AS loan_id, v.wo_date::date AS wo_date
     FROM (VALUES {wo_pairs}) AS v(loan_id, wo_date)
 ),
-last_m AS (   -- last COMPLETED month
-    SELECT (date_trunc('month', current_date) - interval '1 month')::date AS m
+last_m AS (   -- last month IN the grid, now the CURRENT (partial) month
+    -- Changed 2026-08-13 (was: last COMPLETED month). The trend stopped at the
+    -- previous month-end, so the current month never appeared on any trend —
+    -- Write-off Recovery showed nothing for Aug-2026.
+    --
+    -- THE CURRENT MONTH IS MTD — 1st to T-1, because the warehouse only ever
+    -- holds through yesterday. That is the same basis as every other MTD measure
+    -- on the dashboard, not a defect: flows (collection, recovery, demand,
+    -- disbursement) are month-to-date and read low beside completed months by
+    -- definition; stocks (pos_eom, loans_eom, par*) are a valid T-1 snapshot.
+    --
+    -- For FLOW measures the backend supersedes this row with the live MTD figure
+    -- (_append_flow_live_point, trend.py:657) and sets partial_last, so the UI
+    -- labels the point "MTD, partial month" and dashes it. Both paths agree on
+    -- the basis; the engine row is what makes the month exist at all.
+    SELECT date_trunc('month', current_date)::date AS m
 ),
 
 hierarchy AS (
@@ -218,6 +232,7 @@ state AS (
         -- death cases follow the core (DPD 0); see loans.is_death
         CASE WHEN l.is_death THEN 0 ELSE coalesce(dp.dpd, 0) END  AS dpd,
         greatest(l.orig_amount - c.cum_coll_prin, 0)              AS pos,
+        l.is_death,
         l.branch_id, l.lo_id, l.business_segment, l.wo_month,
         l.disb_year, l.cycle_no, l.prod_classification
     FROM cums c
@@ -337,9 +352,33 @@ agg AS (
                                           AND coalesce(f.prev_dpd, 0) = 0)             AS reg_demand,
         sum(f.coll_capped)      FILTER (WHERE NOT f.is_wo
                                           AND coalesce(f.prev_dpd, 0) = 0)             AS reg_collection,
+        -- COUNT versions of the same cohort, for the incentive engine's CE%.
+        -- The policy's 0-bucket CE is a COUNT ratio (collection count / demand
+        -- count), not an amount ratio, so these sit beside the amount measures
+        -- rather than replacing them. Purely additive: no existing measure or
+        -- its filter changes, so every published figure stays byte-identical.
+        -- A loan counts as collected when the capped collection covers the
+        -- month's demand (0.005 tolerance for float noise).
+        count(*)                FILTER (WHERE NOT f.is_wo
+                                          AND coalesce(f.prev_dpd, 0) = 0
+                                          AND NOT f.is_death
+                                          AND f.due > 0)                               AS reg_demand_count,
+        count(*)                FILTER (WHERE NOT f.is_wo
+                                          AND coalesce(f.prev_dpd, 0) = 0
+                                          AND NOT f.is_death
+                                          AND f.due > 0
+                                          AND f.coll_capped >= f.due - 0.005)          AS reg_collection_count,
         -- collections this month from loans PAR>60 at previous month-end
         sum(f.coll)             FILTER (WHERE NOT f.is_wo
                                           AND coalesce(f.prev_dpd, 0) > 60)            AS par60_collection,
+        -- collections this month from loans in the 1-60 bucket at the previous
+        -- month-end. Feeds the incentive recovery bonus, which pays 2% on this
+        -- and 4% on the 60+ side, so it must be an AMOUNT — a count multiplied
+        -- by 2% would not be money. Mirrors par60_collection exactly: same
+        -- source, same NOT is_wo filter, same prev-month-end bucket basis, so
+        -- the two sides of the bonus are measured the same way.
+        sum(f.coll)             FILTER (WHERE NOT f.is_wo
+                                          AND coalesce(f.prev_dpd, 0) BETWEEN 1 AND 60) AS par1_60_collection,
         -- post-write-off recovery
         sum(f.coll)             FILTER (WHERE f.is_post_wo)                            AS wo_recovery,
         -- write-off PORTION of the flow measures (is_wo). "With W/O" = base + *_wo,
@@ -375,6 +414,7 @@ agg AS (
         a.demand, a.collection, a.collection_capped,
         a.slip_count, a.slip_pos, a.prev_regular_pos,
         a.reg_demand, a.reg_collection,
+        a.reg_demand_count, a.reg_collection_count, a.par1_60_collection,
         p.par60_collection,
         r.wo_recovery,
         a.demand_wo, a.collection_capped_wo, a.slip_count_wo, a.slip_pos_wo,
@@ -439,7 +479,10 @@ SELECT
     round(coalesce(a.prev_regular_pos, 0)::numeric, 2)   AS prev_regular_pos,
     round(coalesce(a.reg_demand, 0)::numeric, 2)         AS reg_demand,
     round(coalesce(a.reg_collection, 0)::numeric, 2)     AS reg_collection,
+    coalesce(a.reg_demand_count, 0)                      AS reg_demand_count,
+    coalesce(a.reg_collection_count, 0)                  AS reg_collection_count,
     round(coalesce(a.par60_collection, 0)::numeric, 2)   AS par60_collection,
+    round(coalesce(a.par1_60_collection, 0)::numeric, 2) AS par1_60_collection,
     round(coalesce(a.wo_recovery, 0)::numeric, 2)        AS wo_recovery,
     round(coalesce(a.demand_wo, 0)::numeric, 2)              AS demand_wo,
     round(coalesce(a.collection_capped_wo, 0)::numeric, 2)   AS collection_capped_wo,

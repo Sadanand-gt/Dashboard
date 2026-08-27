@@ -65,7 +65,10 @@ fy AS (
 months AS (
     SELECT date_trunc('month', gs)::date                                AS month_start,
            (date_trunc('month', gs) + interval '1 month - 1 day')::date  AS month_end
-    FROM fy, generate_series(fy.fy_start,
+    -- Starts ONE MONTH BEFORE the FY. April is paid on March's grade, so
+    -- without the extra month every April row is NO_PREV_GRADE. The extra month
+    -- is dropped from the output at the end.
+    FROM fy, generate_series((fy.fy_start - interval '1 month')::date,
                              (date_trunc('month', current_date) - interval '1 day')::date,
                              interval '1 month') gs
 ),
@@ -152,21 +155,32 @@ graded2 AS (
 -- ── CE %, DISBURSEMENT, BUCKET COLLECTIONS ──────────────────────────────────
 -- status='A' only: 'V' rows carry zero amount and 'R' rows are reversals —
 -- tested against Excel on the write-off recovery measure (A alone was closest).
+-- 0-BUCKET CE IS A COUNT RATIO, NOT AN AMOUNT RATIO:
+--   0B collection COUNT / 0B demand COUNT.
+-- Counted off repayment_schedule, where each row is one instalment carrying both
+-- what was due and what was collected against it. An amount ratio was wrong and
+-- visibly so — it returned CE up to 466%, because collections in a month include
+-- arrears and prepayments belonging to other months' demand. A count ratio has
+-- no such leak and caps at 100% by construction.
+-- An instalment counts as collected when what was received covers what was due
+-- (0.005 tolerance for float noise).
 demand_m AS (
     SELECT m.month_end, cm.branch_id,
-           -- total_amt_due is the per-instalment demand on repayment_schedule
-           -- (there is no demand_amount column). Principal + interest.
-           sum(coalesce(rs.total_amt_due,0)) AS zero_bucket_demand
+           count(*)                                        AS zero_bucket_demand,
+           count(*) FILTER (
+               WHERE coalesce(rs.principal_collected,0) + coalesce(rs.interest_collected,0)
+                     >= coalesce(rs.total_amt_due,0) - 0.005
+               AND coalesce(rs.total_amt_due,0) > 0)        AS zero_bucket_coll
     FROM months m
     JOIN public.repayment_schedule rs
       ON rs.demand_date BETWEEN m.month_start AND m.month_end
     JOIN public.home_loan_account la  ON la.loan_id   = rs.loan_id
     JOIN public.home_center_master cm ON cm.center_id = la.center_id
+    WHERE coalesce(rs.total_amt_due,0) > 0
     GROUP BY 1,2
 ),
 coll_m AS (
     SELECT m.month_end, cm.branch_id,
-           sum(coalesce(rd.principal_collected,0)+coalesce(rd.interest_collected,0)) AS zero_bucket_coll,
            sum(CASE WHEN coalesce(la.dpd,0) BETWEEN 1 AND 60
                     THEN coalesce(rd.principal_collected,0)+coalesce(rd.interest_collected,0)
                     ELSE 0 END) AS coll_1_60,
@@ -238,9 +252,10 @@ core_matrix(grade, disb_lo, disb_hi, payouts) AS (
 metrics AS (
     SELECT g.month_end, g.branch_id, g.zero_bucket_pos, g.grade, g.prev_grade,
            coalesce(dm.zero_bucket_demand,0) AS zero_bucket_demand,
-           coalesce(cm.zero_bucket_coll,0)   AS zero_bucket_coll,
+           coalesce(dm.zero_bucket_coll,0)   AS zero_bucket_coll,
+           -- count / count
            CASE WHEN coalesce(dm.zero_bucket_demand,0) > 0
-                THEN round((cm.zero_bucket_coll / dm.zero_bucket_demand)::numeric, 4)
+                THEN round(dm.zero_bucket_coll::numeric / dm.zero_bucket_demand, 4)
            END                               AS ce_pct,
            coalesce(dz.disb_amount,0)        AS disb_amount,
            coalesce(dz.disb_count,0)         AS disb_count,
@@ -300,10 +315,14 @@ SELECT
     round((p.coll_1_60 * 0.02 + p.coll_60_plus * 0.04)::numeric, 2) AS recovery_bonus,
     NULL::numeric                                       AS upgrade_bonus,
 
-    -- Final = Core Matrix + Recovery. Upgrade bonus is excluded until its slab
-    -- is read. The strict gate zeroes the whole row.
+    -- Final = Core Matrix + Recovery. Gated on the FULL eligibility test, not
+    -- just exit/active: an earlier version zeroed only on those two, so rows
+    -- with NO_PREV_GRADE or CE_BELOW_FLOOR still drew the recovery bonus and
+    -- April paid Rs 3.69L against zero eligible employees.
     CASE WHEN e.exit_date IS NOT NULL
            OR upper(coalesce(e.active,'N')) <> 'Y'
+           OR p.prev_grade IS NULL
+           OR p.ce_band IS NULL
          THEN 0
          ELSE coalesce(mx.payouts[p.ce_band], 0)
             + round((p.coll_1_60 * 0.02 + p.coll_60_plus * 0.04)::numeric, 2)
@@ -321,12 +340,24 @@ SELECT
     END                                                 AS ineligible_reason
 
 FROM priced p
-JOIN emp e ON e.branch_id = p.branch_id
+-- ONE Branch Manager per branch: joining every employee whose designation
+-- matched produced ~2.8 BMs per branch (52% of rows NOT_ACTIVE), because the
+-- master keeps historical postings. Take the active one, most recently posted.
+JOIN LATERAL (
+    SELECT * FROM emp e0
+    WHERE e0.branch_id = p.branch_id
+      AND e0.designation_name ILIKE '%Branch Manager%'
+      AND upper(coalesce(e0.active,'N')) = 'Y'
+      AND e0.exit_date IS NULL
+    ORDER BY e0.employee_id DESC
+    LIMIT 1
+) e ON TRUE
 LEFT JOIN core_matrix mx
        ON mx.grade = p.prev_grade
       AND p.disb_amount >= mx.disb_lo
       AND p.disb_amount <  mx.disb_hi
-WHERE e.designation_name ILIKE '%Branch Manager%'
+-- Drop the pre-FY priming month; it exists only to give April a prev_grade.
+WHERE p.month_end >= (SELECT fy_start FROM fy)
 
 -- =============================================================================
 -- VERIFICATION — NOT DONE. No figure here is payable until all five pass.

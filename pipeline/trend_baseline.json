@@ -1,0 +1,75 @@
+{
+ "_taken_at": "2026-08-13T19:36:24",
+ "_writeoff_master": {
+  "loans": 30661,
+  "amount": 701938840.5
+ },
+ "rows": [
+  {
+   "month_end": "2026-02-28",
+   "loans_eom": 105125.0,
+   "pos_eom": 3098013589.0,
+   "reg_demand": 259837334.0,
+   "reg_collection": 258544563.0,
+   "par0_pos": 155681746.0,
+   "par30_pos": 143750582.0,
+   "par90_pos": 119824080.0,
+   "collection_capped": 261329734.0
+  },
+  {
+   "month_end": "2026-03-31",
+   "loans_eom": 99107.0,
+   "pos_eom": 3135248534.0,
+   "reg_demand": 250217246.0,
+   "reg_collection": 249551249.0,
+   "par0_pos": 72846002.0,
+   "par30_pos": 66397959.0,
+   "par90_pos": 45219753.0,
+   "collection_capped": 251903945.0
+  },
+  {
+   "month_end": "2026-04-30",
+   "loans_eom": 96788.0,
+   "pos_eom": 3201133898.0,
+   "reg_demand": 246536220.0,
+   "reg_collection": 244826327.0,
+   "par0_pos": 82323875.0,
+   "par30_pos": 68756525.0,
+   "par90_pos": 52948734.0,
+   "collection_capped": 246424167.0
+  },
+  {
+   "month_end": "2026-05-31",
+   "loans_eom": 96316.0,
+   "pos_eom": 3328940203.0,
+   "reg_demand": 246664035.0,
+   "reg_collection": 245882094.0,
+   "par0_pos": 85628520.0,
+   "par30_pos": 77401410.0,
+   "par90_pos": 60309549.0,
+   "collection_capped": 247451851.0
+  },
+  {
+   "month_end": "2026-06-30",
+   "loans_eom": 94489.0,
+   "pos_eom": 3417038319.0,
+   "reg_demand": 249513946.0,
+   "reg_collection": 248498386.0,
+   "par0_pos": 52661267.0,
+   "par30_pos": 43671720.0,
+   "par90_pos": 26554261.0,
+   "collection_capped": 249600158.0
+  },
+  {
+   "month_end": "2026-07-31",
+   "loans_eom": 94041.0,
+   "pos_eom": 3512431699.0,
+   "reg_demand": 253949739.0,
+   "reg_collection": 252948352.0,
+   "par0_pos": 56719671.0,
+   "par30_pos": 49183665.0,
+   "par90_pos": 34795600.0,
+   "collection_capped": 253918915.0
+  }
+ ]
+}
