@@ -69,10 +69,15 @@ def _apply_filters(
     branch_state=None, district=None, prod_class=None, od_status=None,
     od_bucket=None, bucket_movement=None, loan_status=None, disb_year=None,
     cycle=None, purpose=None, facility=None, lender=None, caste=None, religion=None,
-    portfolio=None,
+    portfolio=None, loan_id=None, eom_dpd_gt=None,
 ) -> pd.DataFrame:
-    # Portfolio toggle: 'without' = exclude write-off loans (master + DB status)
-    if portfolio == "without" and "loan_status" in df.columns:
+    # Portfolio toggle: 'without' = exclude write-off loans (master + DB status).
+    # A MISSING value now means 'without', matching aum.py and aml.py — those used
+    # (portfolio or "without") while this endpoint treated None as 'with', so the
+    # same missing parameter produced opposite portfolios across the three APIs.
+    # Every caller in the app sends the value explicitly, so no displayed figure
+    # changes; this only makes the fallback consistent for external callers.
+    if (portfolio or "without") == "without" and "loan_status" in df.columns:
         df = df[df["loan_status"] != "Write-off"]
     df = segment_filter(df, segment or "ALL")
     df = hier(df, cluster, region, area, branch, zone=zone)
@@ -90,6 +95,22 @@ def _apply_filters(
     df = multi(df, "lender_id",           lender)
     df = multi(df, "caste",               caste)
     df = multi(df, "religion",            religion)
+    df = multi(df, "loan_id",             loan_id)
+    # PAR>60 cohort. eom_dpd is the loan's DPD at the PREVIOUS month-end, so
+    # eom_dpd_gt=60 reproduces the trend engine's own par60_collection rule
+    # exactly — `sum(coll) WHERE NOT is_wo AND prev_dpd > 60` in trend_full_*.sql.
+    # Strictly greater than, not >=, for the same reason.
+    if eom_dpd_gt is not None:
+        if "eom_dpd" not in df.columns:
+            # Do NOT skip quietly. rpt_collection is pre-aggregated and has no
+            # eom_dpd, so an ignored filter returns the WHOLE BOOK looking like a
+            # filtered cohort — which is what /collection/kpis did before the
+            # PAR>60 endpoints were pointed at the loan table.
+            raise ValueError(
+                "eom_dpd_gt was passed but this frame has no eom_dpd column — it "
+                "only exists at loan grain (rpt_collection_loans). Use the "
+                "/collection/par60/* endpoints.")
+        df = df[pd.to_numeric(df["eom_dpd"], errors="coerce").fillna(0) > float(eom_dpd_gt)]
     return df
 
 
@@ -104,6 +125,13 @@ def _filter_params(
     cycle: Optional[str] = Query(None), purpose: Optional[str] = Query(None),
     facility: Optional[str] = Query(None), lender: Optional[str] = Query(None),
     caste: Optional[str] = Query(None), religion: Optional[str] = Query(None),
+    # Loan ID is a LOOKUP, not a grouping — one row per loan is unusable as
+    # an AP dimension, so it filters instead. Comma-separated ids allowed.
+    loan_id: Optional[str] = Query(None),
+    # Keeps only loans that were more than this many days past due at the
+    # PREVIOUS month-end. The PAR 60 Collection page sends 60; every other
+    # caller omits it and sees the whole book.
+    eom_dpd_gt: Optional[int] = Query(None),
     portfolio: Optional[str] = Query(None),
 ) -> dict:
     return dict(
@@ -112,7 +140,8 @@ def _filter_params(
         prod_class=prod_class, od_status=od_status, od_bucket=od_bucket,
         bucket_movement=bucket_movement, loan_status=loan_status, disb_year=disb_year,
         cycle=cycle, purpose=purpose, facility=facility, lender=lender,
-        caste=caste, religion=religion, portfolio=portfolio,
+        caste=caste, religion=religion, portfolio=portfolio, loan_id=loan_id,
+        eom_dpd_gt=eom_dpd_gt,
     )
 
 
@@ -129,6 +158,8 @@ DIM_COL: dict[str, str] = {
 }
 
 _METRICS = ["t1_demand", "t1_collection", "t1_ftod", "t1_demand_count",
+            "t1_collected_count", "mtd_collection_count", "mtd_collected_count",
+            "mtd_full_paid_count",
             "mtd_demand", "mtd_collection", "mtd_ontime", "mtd_ftod", "mtd_demand_count",
             "pmsd_demand", "pmsd_collection", "pmtd_demand", "pmtd_collection", "loan_count"]
 
@@ -159,14 +190,38 @@ def _row_metrics(g) -> dict:
     t1d, t1c = float(g["t1_demand"].sum()), float(g["t1_collection"].sum())
     md, mc = float(g["mtd_demand"].sum()), float(g["mtd_collection"].sum())
     mot = float(g["mtd_ontime"].sum())
+    # ON-TIME collection against T-1's own demand, capped per loan in the
+    # pipeline. t1_collection is every rupee received on T-1 — including arrears
+    # against older dues — so t1_collection / t1_demand read 110.15% on
+    # 2026-08-13 while 233 loans first-time slipped that day. The formula is
+    # unchanged (on-time collection / current demand); this is the numerator it
+    # always expected. Falls back to t1_collection until the pipeline has run
+    # once with the new column.
+    t1ot = float(g["t1_ontime"].sum()) if "t1_ontime" in g.columns else t1c
     return {
         "loan_count":       int(g["loan_count"].sum()),
         "t1_demand_count":  _isum(g, "t1_demand_count"),
+        # loans that had a T-1 demand AND collected against it — the count pair
+        # that makes the OTRR ratio readable on the card
+        "t1_collection_count": _isum(g, "t1_collection_count"),
+        # TOTAL loans that paid, demand or not. This is what belongs beside the
+        # collection AMOUNT: the amount counts every receipt, so pairing it with
+        # the demand-matched count made the card contradict itself (Rs 24.8 L
+        # labelled "25 loans" when 458 paid, 433 of them against arrears).
+        "t1_collected_count": _isum(g, "t1_collected_count"),
         "mtd_demand_count": _isum(g, "mtd_demand_count"),
+        "mtd_collection_count": _isum(g, "mtd_collection_count"),
+        "mtd_collected_count": _isum(g, "mtd_collected_count"),
+        # FULL vs PARTIAL settlement of the month's own demand. Partial is derived
+        # from the same base, so the two always sum to mtd_collection_count.
+        "mtd_full_paid_count": _isum(g, "mtd_full_paid_count"),
+        "mtd_partial_paid_count": max(
+            _isum(g, "mtd_collection_count") - _isum(g, "mtd_full_paid_count"), 0),
         "t1_demand":    t1d,
         "t1_collection": t1c,
+        "t1_ontime":    t1ot,
         "t1_ce":        _div(t1c, t1d),     # .pbit uncapped collection efficiency
-        "t1_otrr":      _pct(t1c, t1d),     # OTRR — unchanged (capped)
+        "t1_otrr":      _pct(t1ot, t1d),    # OTRR = on-time collection / demand
         "t1_ftod":      int(g["t1_ftod"].sum()),
         "mtd_demand":   md,
         "mtd_collection": mc,
@@ -248,3 +303,148 @@ def collection_refresh(user: dict = Depends(get_current_user)):
     except ValueError:
         label = ts.strftime("%d %b %Y") if pd.notna(ts) else "—"
     return {"refresh": label}
+
+
+# =============================================================================
+# LOAN-WISE EXPORT (rpt_collection_loans)
+#
+# Same filter chain as the pages, over a table built from collection_fact.sql's
+# own CTEs, so the file reconciles to the screen. Verified 2026-08-13: all six
+# measures tie exactly (ftod 3,826 · t1_ontime 10,094,982 · mtd_ontime
+# 244,839,611).
+# =============================================================================
+
+COLL_EXPORT_COLS = [
+    "loan_id", "loan_source", "business_segment", "loan_status",
+    "eom_dpd", "live_dpd", "dpd_bucket", "bucket_movement", "ftod_flag",
+    "t1_demand", "t1_collection", "t1_ontime",
+    "mtd_demand", "mtd_collection", "mtd_ontime",
+    "zone_name", "cluster_name", "region_name", "area_name", "branch_name",
+    "branch_id", "lo_id", "prod_classification", "state_id", "district_id",
+]
+
+
+@router.get("/collection/loans")
+def collection_loans(filters: dict = Depends(_filter_params),
+                     user: dict = Depends(get_current_user)):
+    """Loan-wise rows for the T-1 and MTD Collection CSV exports."""
+    df = read_report("rpt_collection_loans")
+    if df.empty:
+        return {"rows": [], "columns": COLL_EXPORT_COLS}
+    df = _apply_filters(df, **filters)   # takes kwargs, not a dict
+    if df.empty:
+        return {"rows": [], "columns": COLL_EXPORT_COLS}
+    cols = [c for c in COLL_EXPORT_COLS if c in df.columns]
+    out = df[cols].copy()
+    sort = [c for c in ("mtd_demand", "t1_demand") if c in out.columns]
+    if sort:
+        out = out.sort_values(sort, ascending=False)
+    return {"rows": out.fillna("").to_dict("records"), "columns": cols}
+
+
+# =============================================================================
+# PAR 60 COLLECTION (loan grain) — NOT the figure the PAR 60 page shows.
+#
+# SUPERSEDED 2026-08-26. The page now reads the TREND engine
+# (/api/trend/series?measure=par60_collection), because that is the measure that
+# reconciles: against "August, 2026 Dashboards" -> "Trend - PAR60 Collection" it
+# matches EXACTLY in 9 of 12 months, worst month 1.24%. These endpoints, built
+# on eom_dpd, read Rs 0.029 Cr for August against the trend's Rs 0.067 Cr —
+# roughly half — because collection_fact derives DPD from instalment-level
+# cumulative due while the trend walks a day-level ledger.
+#
+# Kept because they are the only LOAN-GRAIN view of the cohort (which loans,
+# who paid nothing, the CSV). Use them to get a list to act on; do NOT quote
+# their totals as the PAR>60 collection figure.
+#
+# READS THE LOAN TABLE, NOT rpt_collection. The cohort is defined by eom_dpd
+# (DPD at the PREVIOUS month-end), which is a per-loan fact and therefore does
+# not exist on the pre-aggregated table — passing eom_dpd_gt to /collection/kpis
+# is a SILENT NO-OP that returns the whole book. Same defect aml.py fixed by
+# moving to rpt_aml_loans, and the same reason.
+#
+# The cohort rule `eom_dpd > 60` is the trend engine's own:
+# `sum(coll) WHERE NOT is_wo AND prev_dpd > 60` in trend_full_*.sql. Strictly
+# greater than, and fixed at the PREVIOUS month-end so the denominator cannot
+# move underneath the numerator while the month runs.
+#
+# No PMTD/PMSD comparison is offered: those columns live only on the aggregate
+# table, so a prior-period figure for this cohort would have to be invented.
+# =============================================================================
+
+PAR60_EOM_DPD_GT = 60
+
+
+def _par60_frame(filters: dict) -> pd.DataFrame:
+    df = read_report("rpt_collection_loans")
+    if df.empty:
+        return df
+    f = dict(filters)
+    f["eom_dpd_gt"] = PAR60_EOM_DPD_GT
+    df = _apply_filters(df, **f)
+    if df.empty:
+        return df
+    for c in ("t1_demand", "t1_collection", "t1_ontime",
+              "mtd_demand", "mtd_collection", "mtd_ontime", "pos"):
+        if c in df.columns:
+            df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
+    return df
+
+
+def _par60_metrics(g: pd.DataFrame) -> dict:
+    t1d, t1c = float(g["t1_demand"].sum()), float(g["t1_collection"].sum())
+    md, mc = float(g["mtd_demand"].sum()), float(g["mtd_collection"].sum())
+    mot = float(g["mtd_ontime"].sum())
+    t1ot = float(g["t1_ontime"].sum()) if "t1_ontime" in g.columns else t1c
+    # Counts are derived from the loan rows themselves — at this grain a "loan
+    # that paid" is a row with collection > 0, so there is nothing to look up.
+    return {
+        "loan_count": int(len(g)),
+        "pos": float(g["pos"].sum()) if "pos" in g.columns else 0.0,
+        "t1_demand": t1d, "t1_collection": t1c, "t1_ontime": t1ot,
+        "t1_ce": _div(t1c, t1d), "t1_otrr": _pct(t1ot, t1d),
+        "mtd_demand": md, "mtd_collection": mc, "mtd_ontime": mot,
+        "mtd_ce": _div(mc, md), "mtd_otrr": _pct(mot, md),
+        "mtd_demand_count": int((g["mtd_demand"] > 0).sum()),
+        "mtd_collected_count": int((g["mtd_collection"] > 0).sum()),
+        "t1_collected_count": int((g["t1_collection"] > 0).sum()),
+        # Loans still carrying arrears with NOTHING paid this month — the
+        # actionable list on a deep-arrears page.
+        "no_pay_count": int((g["mtd_collection"] <= 0).sum()),
+    }
+
+
+@router.get("/collection/par60/kpis")
+def par60_kpis(filters: dict = Depends(_filter_params),
+               user: dict = Depends(get_current_user)):
+    df = _par60_frame(filters)
+    if df.empty:
+        return {}
+    return _par60_metrics(df)
+
+
+@router.get("/collection/par60/group-summary")
+def par60_group_summary(
+    group_by: str = Query("business_segment"),
+    group_by_2: Optional[str] = Query(None),
+    filters: dict = Depends(_filter_params),
+    user: dict = Depends(get_current_user),
+):
+    df = _par60_frame(filters)
+    if df.empty:
+        return []
+    g1 = _safe_col(df, group_by)
+    g2 = _safe_col(df, group_by_2) if (group_by_2 and group_by_2 != "none") else None
+    keys = [g1] + ([g2] if g2 and g2 != g1 else [])
+    rows = []
+    for k, grp in df.groupby(keys, dropna=False):
+        vals = k if isinstance(k, tuple) else (k,)
+        rec = {"name": str(vals[0]), **_par60_metrics(grp)}
+        if len(keys) > 1:
+            rec["name2"] = str(vals[1])
+        rows.append(rec)
+    rows.sort(key=lambda r: -r["mtd_demand"])
+    grand = {"name": "Grand Total", **_par60_metrics(df)}
+    if len(keys) > 1:
+        grand["name2"] = ""
+    return rows + [grand]

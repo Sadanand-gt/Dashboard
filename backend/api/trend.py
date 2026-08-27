@@ -26,6 +26,10 @@ TREND_COMPONENTS = [
     "wo_loans_eom", "wo_pos_eom", "disb_count", "disb_amount", "demand",
     "collection", "collection_capped", "slip_count", "slip_pos",
     "prev_regular_pos", "reg_demand", "reg_collection", "par60_collection",
+    # Collections from the 1-60 bucket. On rpt_trend_full since the engine was
+    # built but never surfaced; the PAR 60 page pairs it with par60_collection
+    # to show whether recovery is coming from early or deep arrears.
+    "par1_60_collection",
     "wo_recovery",
     # write-off portion of the flow measures — "With W/O" folds these in (see
     # _apply_portfolio), so CE / roll-rate / slippage offer both views like POS.
@@ -71,6 +75,20 @@ MEASURES: dict = {
     #  standard complement definition is used)
     "demand_roll_rate": (INV,    "reg_collection", "reg_demand"),
     "par60_collection": (SUM,    "par60_collection", None),
+    "par1_60_collection": (SUM,  "par1_60_collection", None),
+    # STOCK of the deep-arrears book at month-end, and what share of it came
+    # back that month. par60_collection is reconciled against
+    # "August, 2026 Dashboards" -> "Trend - PAR60 Collection": 8 of 12 months
+    # match to the rupee, mean absolute difference 0.78%.
+    "par60_pos":        (SUM,    "par60_pos", None),
+    # EXCL W/O ONLY — do not read this on the "With W/O" toggle.
+    # _apply_portfolio adds the ENTIRE write-off POS (wo_pos_eom) to par60_pos
+    # in the "with" view, but par60_collection has no _wo companion in
+    # WO_FLOW_PAIRS, so the numerator stays live-book while the denominator
+    # gains the whole written-off book. The ratio collapses toward zero and
+    # means nothing. The Excel reconciliation above is on the stored (excl-W/O)
+    # values, which is the view the PAR 60 page pins itself to.
+    "par60_recovery_pct": (RATIO, "par60_collection", "par60_pos"),
     "wo_recovery":      (SUM,    "wo_recovery", None),
 }
 
@@ -534,7 +552,12 @@ FLOW_LIVE: dict = {
     "par60_collection":  ("rpt_mtd_flow",     "mtd_par60_collection", None),
 }
 # Extra WHERE to isolate the current month's slice within a multi-period table.
-FLOW_EXTRA_WHERE: dict = {"rpt_disbursement": "period_type = 'MTD'"}
+# rpt_od_slippage also carries loans that slipped and were then written off
+# (in_od_matrix = FALSE, added 2026-08-13). slip_pos / slip_count and roll_rate
+# must stay on the OD Status matrix basis, which drops write-offs — so they are
+# filtered here rather than at each call site.
+FLOW_EXTRA_WHERE: dict = {"rpt_disbursement": "period_type = 'MTD'",
+                          "rpt_od_slippage": "in_od_matrix IS TRUE"}
 _FLOW_COLS_CACHE: dict = {}
 
 
