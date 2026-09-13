@@ -12,7 +12,14 @@ import sys
 import time
 from datetime import datetime
 
-from pipeline.runner import REPORTS, SPLIT_REPORTS, run_report, run_trend_full
+from pipeline.runner import (
+    REPORTS,
+    SPLIT_REPORTS,
+    run_aum_pair,
+    run_collection_pair,
+    run_report,
+    run_trend_full,
+)
 
 ATTEMPTS = 3
 RETRY_WAIT_S = 30
@@ -38,7 +45,21 @@ def main() -> int:
     print(f"=== Ananya MIS daily pipeline — {t0:%Y-%m-%d %H:%M:%S} ===", flush=True)
     print(f"    trend_full: {'FULL REBUILD (all months)' if TREND_FULL_REBUILD else 'incremental (history frozen)'}", flush=True)
 
-    jobs = [(k, ("report", sqlf, table)) for k, sqlf, table in REPORTS]
+    # Current Outstanding and Collection each use one loan-grain query to build
+    # both their aggregate and export tables. Their paired runners remove the
+    # internal agg_* helper columns before writing the export table. Calling the
+    # two report keys separately through run_report would both duplicate the
+    # heaviest queries and try to persist those helper columns.
+    jobs = []
+    for key, sql_file, table in REPORTS:
+        if key == "aum_status":
+            jobs.append(("aum_status+aum_loans", ("aum_pair", None, None)))
+        elif key == "collection_fact":
+            jobs.append(("collection_fact+collection_loans", ("collection_pair", None, None)))
+        elif key in {"aum_loans", "collection_loans"}:
+            continue
+        else:
+            jobs.append((key, ("report", sql_file, table)))
     jobs += [(k, ("split", None, None)) for k in SPLIT_REPORTS]
 
     results = {}
@@ -47,7 +68,11 @@ def main() -> int:
         for attempt in range(1, ATTEMPTS + 1):
             print(f"\n--- {key} (attempt {attempt}/{ATTEMPTS}) — {datetime.now():%H:%M:%S} ---", flush=True)
             try:
-                if key == "trend_full":
+                if kind == "aum_pair":
+                    ok = run_aum_pair()
+                elif kind == "collection_pair":
+                    ok = run_collection_pair()
+                elif key == "trend_full":
                     ok = run_trend_full(full_rebuild=TREND_FULL_REBUILD)
                 elif kind == "split":
                     ok = SPLIT_REPORTS[key]()
