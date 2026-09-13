@@ -345,7 +345,18 @@ il_base AS (
               + greatest(coalesce(dt.int_coll_eom,0)  - coalesce(s.int_due_eom,0),  0),
             coalesce(s.cap_demand_mtd,0)
         )                              AS mtd_collection,
-        coalesce(dt.mtd_ontime,0)     AS mtd_ontime,
+        -- CAPPED PER LOAN at that loan's own MTD demand, matching t1_ontime.
+        -- dt.mtd_ontime is a TIMING measure (receipts on/before the loan's last
+        -- MTD demand date), so a borrower clearing arrears plus the current
+        -- instalment before the due date produced more "on-time" than was due:
+        -- 1,723 loans, Rs 52.4 L excess on 2026-08-20, which pushed branch-level
+        -- MTD OTRR over 100% (5 branches, max 103.40%) — the same defect the
+        -- uncapped t1 numerator had at 110.15%.
+        -- The cap keeps the ON-TIME meaning (late payers are still excluded) and
+        -- only bounds it. It is deliberately NOT least(mtd_collection, mtd_demand):
+        -- that is the capped CE (93.22%) and would count 6,584 loans that paid
+        -- AFTER their due date as on-time, collapsing OTRR into CE.
+        LEAST(coalesce(dt.mtd_ontime,0), coalesce(s.mtd_demand,0)) AS mtd_ontime,
         coalesce(s.pmsd_demand,0)      AS pmsd_demand,
         coalesce(dt.pmsd_collection,0) AS pmsd_collection,
         coalesce(s.pmtd_demand,0)      AS pmtd_demand,
@@ -395,7 +406,18 @@ jlg_base AS (
               + greatest(coalesce(dt.int_coll_eom,0)  - coalesce(s.int_due_eom,0),  0),
             coalesce(s.cap_demand_mtd,0)
         )                              AS mtd_collection,
-        coalesce(dt.mtd_ontime,0)     AS mtd_ontime,
+        -- CAPPED PER LOAN at that loan's own MTD demand, matching t1_ontime.
+        -- dt.mtd_ontime is a TIMING measure (receipts on/before the loan's last
+        -- MTD demand date), so a borrower clearing arrears plus the current
+        -- instalment before the due date produced more "on-time" than was due:
+        -- 1,723 loans, Rs 52.4 L excess on 2026-08-20, which pushed branch-level
+        -- MTD OTRR over 100% (5 branches, max 103.40%) — the same defect the
+        -- uncapped t1 numerator had at 110.15%.
+        -- The cap keeps the ON-TIME meaning (late payers are still excluded) and
+        -- only bounds it. It is deliberately NOT least(mtd_collection, mtd_demand):
+        -- that is the capped CE (93.22%) and would count 6,584 loans that paid
+        -- AFTER their due date as on-time, collapsing OTRR into CE.
+        LEAST(coalesce(dt.mtd_ontime,0), coalesce(s.mtd_demand,0)) AS mtd_ontime,
         coalesce(s.pmsd_demand,0)      AS pmsd_demand,
         coalesce(dt.pmsd_collection,0) AS pmsd_collection,
         coalesce(s.pmtd_demand,0)      AS pmtd_demand,
@@ -452,8 +474,21 @@ enriched AS (
         CASE b.raw_status WHEN 'A' THEN 'Active' WHEN 'D' THEN 'Death' WHEN 'I' THEN 'Death'
              WHEN 'W' THEN 'Write-off' WHEN 'X' THEN 'Closed'
              ELSE b.raw_status END AS loan_status,
-        -- FTOD (fresh slippage): regular at prev-month-end, overdue now
-        CASE WHEN eom_dpd = 0 AND live_dpd > 0 THEN 1 ELSE 0 END AS ftod_flag
+        -- FTOD (fresh slippage): regular at prev-month-end, overdue now.
+        --
+        -- WRITE-OFFS EXCLUDED (2026-08-13, on instruction). "First-time overdue"
+        -- is a statement about a performing loan deteriorating; a loan already
+        -- written off has by definition already had the worst outcome and cannot
+        -- slip for the first time. Two such loans were being counted — both
+        -- written off per the master (Dec-2025 / Mar-2026) yet still Active in
+        -- core at DPD 4 and 8, because written-off loans stay on the collection
+        -- system for recovery.
+        --
+        -- This makes mtd_ftod agree with the OD Status matrix and the Excel OD
+        -- Slippage sheet by CONSTRUCTION rather than via in_od_matrix: both now
+        -- drop write-offs. Moves mtd_ftod 3,828 -> 3,826 and t1_ftod with it.
+        CASE WHEN eom_dpd = 0 AND live_dpd > 0 AND b.raw_status <> 'W'
+             THEN 1 ELSE 0 END AS ftod_flag
     FROM all_base b
 )
 
@@ -492,6 +527,29 @@ SELECT
     -- period-specific demand loan counts (loans that actually had demand in the period)
     sum(CASE WHEN e.t1_demand  > 0 THEN 1 ELSE 0 END) AS t1_demand_count,
     sum(CASE WHEN e.mtd_demand > 0 THEN 1 ELSE 0 END) AS mtd_demand_count,
+    -- Loans that had a demand on T-1 AND collected against it. Pairs with
+    -- t1_demand_count to give a COUNT-based T-1 OTRR.
+    --
+    -- The amount ratio cannot answer "did yesterday's borrowers pay?": a day's
+    -- receipts include arrears against older dues and advances against future
+    -- ones, so t1_collection / t1_demand reads 105.95% while 263 loans first-time
+    -- slipped. A count ratio is bounded by construction and is the same basis
+    -- the 0-bucket CE uses elsewhere in this dashboard.
+    -- FTOD and OTRR amount logic are untouched.
+    sum(CASE WHEN e.t1_demand > 0 AND e.t1_collection > 0 THEN 1 ELSE 0 END)
+                                                      AS t1_collection_count,
+    -- ON-TIME collection against T-1's own demand, capped PER LOAN.
+    --
+    -- t1_collection is every rupee received on T-1, including arrears against
+    -- older dues and advances against future ones, so t1_collection / t1_demand
+    -- reads 105.95% — over 100% while loans were still slipping. Capping each
+    -- loan at its own T-1 demand answers the question actually being asked:
+    -- of yesterday's demand, how much was met?  OTRR = t1_ontime / t1_demand is
+    -- then bounded by construction.
+    --
+    -- Same shape as mtd_ontime, and the same per-loan capping the CE measures
+    -- use. FTOD is untouched.
+    round(sum(least(e.t1_collection, e.t1_demand))::numeric, 2) AS t1_ontime,
     -- Fresh-slip flag among loans due on T-1 (same measure as mtd_ftod, so
     -- FTOD counts sit exclusively in 'Worsened' rows — matches the Excel)
     sum(CASE WHEN e.t1_demand > 0 THEN e.ftod_flag ELSE 0 END) AS t1_ftod,

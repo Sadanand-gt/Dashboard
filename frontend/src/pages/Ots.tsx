@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import Box from '@mui/material/Box'
+import Button from '@mui/material/Button'
 import Paper from '@mui/material/Paper'
 import Table from '@mui/material/Table'
 import TableHead from '@mui/material/TableHead'
@@ -76,6 +77,8 @@ interface Resp {
 }
 
 export function Ots() {
+  // Charts are opt-in and start hidden, matching every other page.
+  const [showCharts, setShowCharts] = useState(false)
   const [ap1, setAp1] = useState('settle_bucket')
   const [ap2, setAp2] = useState('none')
   const [year, setYear] = useState('ALL')
@@ -291,6 +294,14 @@ export function Ots() {
         </Paper>
       )}
 
+      {/* Charts are opt-in and start hidden, matching every other page. */}
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <Button size="small" variant="outlined" onClick={() => setShowCharts((v) => !v)}
+          sx={{ fontSize: '0.68rem', textTransform: 'none', py: 0.2, px: 1.2, whiteSpace: 'nowrap' }}>
+          {showCharts ? 'Hide charts' : 'Show charts'}
+        </Button>
+      </Box>
+      {showCharts && (<>
       {/* ── 3. CHARTS ─────────────────────────────────────────────────────── */}
       {/* Row 1 — where the settled money went, and the recovery gradient */}
       <Box className="grid grid-cols-1 lg:grid-cols-3 gap-3">
@@ -423,6 +434,7 @@ export function Ots() {
           )}
         </Box>
       </Paper>
+      </>)}
 
       {/* ── 4. DETAIL TABLE ───────────────────────────────────────────────── */}
       <Paper sx={{ overflow: 'hidden' }}>

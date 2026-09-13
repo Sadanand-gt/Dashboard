@@ -110,6 +110,7 @@ def list_users(_: dict = Depends(require_admin)):
                     full_name=user.get("full_name") or user["username"], role=user["role"],
                     scope_level="branch", scope_value="__NO_SCOPE__",
                     allowed_reports=user.get("allowed_reports") or ["*"],
+                    can_export=bool(user.get("can_export")),
                     is_active=False,
                     last_login=user["last_login"].isoformat() if user.get("last_login") else None,
                 ))
@@ -130,7 +131,8 @@ def create_user(body: UserCreate, _: dict = Depends(require_admin)):
         if not profile.get("is_active"):
             raise HTTPException(status_code=400, detail="Ananya Sathi user is inactive")
         mis_user = store_create_user(
-            profile["username"], display_name(profile), body.role, reports
+            profile["username"], display_name(profile), body.role, reports,
+            body.can_export,
         )
         return _as_out(mis_user, profile)
     except ValueError as exc:

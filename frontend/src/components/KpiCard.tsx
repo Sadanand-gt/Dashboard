@@ -1,5 +1,6 @@
 import Box from '@mui/material/Box'
 import Skeleton from '@mui/material/Skeleton'
+import Tooltip from '@mui/material/Tooltip'
 
 type Variant = 'default' | 'green' | 'amber' | 'red' | 'purple'
 
@@ -11,6 +12,9 @@ interface Props {
   loading?: boolean
   delta?: string
   deltaUp?: boolean
+  /** Hover text explaining the card — used where the sub line carries
+   *  abbreviations that need expanding (e.g. the OD split HDPN / PP / AOD). */
+  tooltip?: string
 }
 
 const VARIANT_STYLES: Record<Variant, { border: string; accent: string; bg: string; label: string }> = {
@@ -21,10 +25,10 @@ const VARIANT_STYLES: Record<Variant, { border: string; accent: string; bg: stri
   purple:  { border: '#DDD6FE', accent: '#7C3AED', bg: '#F5F3FF', label: '#6D28D9' },
 }
 
-export function KpiCard({ label, value, sub, variant = 'default', loading = false, delta, deltaUp }: Props) {
+export function KpiCard({ label, value, sub, variant = 'default', loading = false, delta, deltaUp, tooltip }: Props) {
   const s = VARIANT_STYLES[variant]
 
-  return (
+  const card = (
     <Box
       className="rounded-xl"
       sx={{
@@ -80,4 +84,9 @@ export function KpiCard({ label, value, sub, variant = 'default', loading = fals
       </Box>
     </Box>
   )
+
+  // Wrapping in a span keeps Tooltip's ref working without touching the layout.
+  return tooltip
+    ? <Tooltip title={tooltip} placement="top" arrow><span style={{ display: 'block', height: '100%' }}>{card}</span></Tooltip>
+    : card
 }

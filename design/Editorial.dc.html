@@ -1,0 +1,194 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap">
+  <style>
+    body { margin: 0; font-family: 'Inter', system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+    a { color: #1565C0; } a:hover { color: #0D47A1; }
+    .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+    .ed th { color: #64748B; font-weight: 700; font-size: 0.64rem; text-transform: uppercase;
+             letter-spacing: 0.09em; border-bottom: 1px solid #E2E8F0; padding: 10px 16px; white-space: nowrap; }
+    .ed td { border-bottom: 1px solid rgba(0,0,0,0.045); padding: 13px 16px; color: #1E293B; }
+    .ed tbody tr:hover { background: #FBFCFE; }
+  </style>
+</helmet>
+
+<div style="width: 1280px; background: #FFFFFF; padding: 16px; box-sizing: border-box; color: #1E293B">
+
+  <div style="display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px">
+    <div style="font-size: 0.72rem; font-weight: 800; color: #7C3AED; text-transform: uppercase; letter-spacing: 0.1em">Option C · Editorial</div>
+    <div style="font-size: 0.72rem; color: #94A3B8">distance from benchmark, drawn — for reading across a table, not at a desk</div>
+  </div>
+
+  <!-- Parameter bar, unchanged anatomy -->
+  <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap; background: #FFFFFF; border-radius: 16px;
+              padding: 7px 16px; border: 1px solid rgba(0,0,0,0.07); box-shadow: 0 2px 8px -4px rgba(15,23,42,0.28); margin-bottom: 22px">
+    <div style="font-size: 0.95rem; font-weight: 700; color: #1E293B">Delinquencies</div>
+    <div style="width: 1px; height: 22px; background: rgba(0,0,0,0.09)"></div>
+    <div>
+      <div style="font-size: 0.6rem; color: #64748B; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 2px">AP #1</div>
+      <div style="border: 1px solid rgba(0,0,0,0.18); border-radius: 6px; padding: 3px 10px; font-size: 0.75rem">Branch</div>
+    </div>
+    <div>
+      <div style="font-size: 0.6rem; color: #64748B; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 2px">AP #2</div>
+      <div style="border: 1px solid rgba(0,0,0,0.18); border-radius: 6px; padding: 3px 10px; font-size: 0.75rem">Business Segment</div>
+    </div>
+    <div style="width: 1px; height: 22px; background: rgba(0,0,0,0.09)"></div>
+    <div>
+      <div style="font-size: 0.6rem; color: #64748B; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 2px">Portfolio</div>
+      <div style="display: flex; height: 26px; border-radius: 6px; overflow: hidden; border: 1px solid rgba(0,0,0,0.18)">
+        <div style="padding: 0 10px; display: flex; align-items: center; font-size: 0.7rem; color: #64748B">With W/O</div>
+        <div style="padding: 0 10px; display: flex; align-items: center; font-size: 0.7rem; background: rgba(21,101,192,0.12); color: #1565C0; font-weight: 600">Excl W/O</div>
+      </div>
+    </div>
+    <div style="flex-grow: 1"></div>
+    <div style="border: 1px solid rgba(0,0,0,0.18); border-radius: 6px; padding: 4px 12px; font-size: 0.7rem; font-weight: 600; color: #1565C0">Export CSV</div>
+    <div style="text-align: right">
+      <div style="font-size: 0.58rem; color: #94A3B8; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em">As of</div>
+      <div style="font-size: 0.8rem; font-weight: 700; color: #1E293B">21 Aug 2026</div>
+    </div>
+  </div>
+
+  <!-- Headline: one number that leads, the rest in support -->
+  <div style="display: grid; grid-template-columns: 1.15fr 1fr; gap: 40px; margin-bottom: 30px; align-items: start">
+    <div>
+      <div style="font-size: 0.64rem; font-weight: 700; color: #64748B; text-transform: uppercase; letter-spacing: 0.11em; margin-bottom: 8px">Portfolio at risk · 30+ days</div>
+      <div style="display: flex; align-items: flex-end; gap: 16px">
+        <div class="mono" style="font-size: 4.1rem; font-weight: 700; line-height: 0.92; letter-spacing: -0.035em; color: #DC2626">17.25%</div>
+        <div style="padding-bottom: 9px">
+          <div style="display: inline-flex; align-items: center; gap: 4px; background: #FEF2F2; border: 1px solid #FECACA; border-radius: 20px; padding: 3px 10px">
+            <span style="font-size: 0.72rem; font-weight: 700; color: #B91C1C">▲ 0.28 pp</span>
+          </div>
+          <div style="font-size: 0.7rem; color: #94A3B8; margin-top: 4px">vs 16.97% at Jul-26</div>
+        </div>
+      </div>
+      <div style="font-size: 0.9rem; color: #475569; line-height: 1.62; margin-top: 16px; max-width: 520px; text-wrap: pretty">
+        <strong style="color: #1E293B">₹72.19 Cr</strong> of the <strong style="color: #1E293B">₹418.50 Cr</strong> book is 30 or more days overdue, across 123,345 live loans. Four of the eighteen largest branches sit more than half again above their segment's median.
+      </div>
+    </div>
+
+    <div style="display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 12px">
+      <sc-for list="{{minis}}" as="m" hint-placeholder-count="4">
+        <div style="border: 1px solid #E8EDF5; border-radius: 12px; padding: 13px 14px">
+          <div style="font-size: 0.6rem; font-weight: 700; color: #64748B; text-transform: uppercase; letter-spacing: 0.08em">{{m.title}}</div>
+          <div class="mono" style="font-size: 1.25rem; font-weight: 700; color: #1E293B; margin-top: 3px">{{m.value}}</div>
+          <div style="font-size: 0.66rem; color: {{m.ink}}; font-weight: 600; margin-top: 2px">{{m.delta}}</div>
+        </div>
+      </sc-for>
+    </div>
+  </div>
+
+  <!-- Table: heat as a diverging bar from the benchmark -->
+  <div style="display: flex; align-items: baseline; gap: 14px; margin-bottom: 4px; flex-wrap: wrap">
+    <div style="font-size: 1.02rem; font-weight: 700">Branches, worst first</div>
+    <div style="font-size: 0.74rem; color: #64748B">bar shows distance from the <strong style="color: #1E40AF">JLG median, 18.56%</strong> — left is better, right is worse</div>
+  </div>
+
+  <table class="ed" style="width: 100%; border-collapse: collapse">
+    <thead>
+      <tr>
+        <th style="text-align: left; width: 34px"></th>
+        <th style="text-align: left">Branch</th>
+        <th style="text-align: right">POS</th>
+        <th style="text-align: right"># Loans</th>
+        <th style="text-align: right; width: 84px">PAR 30+</th>
+        <th style="text-align: center; width: 320px">Against segment median</th>
+        <th style="text-align: right">PAR 90+</th>
+      </tr>
+    </thead>
+    <tbody>
+      <sc-for list="{{rows}}" as="r" hint-placeholder-count="10">
+        <tr>
+          <td class="mono" style="color: #CBD5E1; font-size: 0.72rem; font-weight: 700">{{r.rank}}</td>
+          <td style="font-weight: 600; white-space: nowrap; font-size: 0.83rem">{{r.branch}}</td>
+          <td class="mono" style="text-align: right; font-size: 0.78rem; color: #475569">{{r.pos}}</td>
+          <td class="mono" style="text-align: right; font-size: 0.78rem; color: #475569">{{r.loans}}</td>
+          <td class="mono" style="text-align: right; font-size: 0.88rem; font-weight: 700; color: {{r.ink}}">{{r.par30}}</td>
+          <td style="padding: 8px 16px">
+            <!-- centre line is the benchmark; the bar is the deviation -->
+            <div style="position: relative; height: 20px">
+              <div style="position: absolute; left: 50%; top: 0; bottom: 0; width: 1px; background: #CBD5E1"></div>
+              <div style="position: absolute; top: 5px; height: 10px; border-radius: 2px;
+                          left: {{r.barLeft}}%; width: {{r.barWidth}}%; background: {{r.barColor}}"></div>
+            </div>
+          </td>
+          <td class="mono" style="text-align: right; font-size: 0.78rem; color: #64748B">{{r.par90}}</td>
+        </tr>
+      </sc-for>
+      <tr>
+        <td></td>
+        <td style="font-weight: 800; font-size: 0.83rem; border-top: 2px solid #CBD5E1">Grand Total</td>
+        <td class="mono" style="text-align: right; font-weight: 800; font-size: 0.78rem; border-top: 2px solid #CBD5E1">₹418.50 Cr</td>
+        <td class="mono" style="text-align: right; font-weight: 800; font-size: 0.78rem; border-top: 2px solid #CBD5E1">123,345</td>
+        <td class="mono" style="text-align: right; font-weight: 800; font-size: 0.88rem; border-top: 2px solid #CBD5E1">17.25%</td>
+        <td style="border-top: 2px solid #CBD5E1"></td>
+        <td class="mono" style="text-align: right; font-weight: 800; font-size: 0.78rem; border-top: 2px solid #CBD5E1">16.92%</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <div style="margin-top: 22px; display: flex; gap: 26px">
+    <div style="flex-grow: 1">
+      <div style="font-size: 0.72rem; font-weight: 700; color: #16A34A; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 5px">What this buys</div>
+      <div style="font-size: 0.8rem; color: #64748B; line-height: 1.6">The bar answers "how far off is this branch" in one glance and to scale — a fill can only say which of five buckets it landed in. The benchmark is a line you can see, not a number in a legend. Reads well at distance, so it suits a board pack or a screen share.</div>
+    </div>
+    <div style="flex-grow: 1">
+      <div style="font-size: 0.72rem; font-weight: 700; color: #D97706; text-transform: uppercase; letter-spacing: 0.08em; margin-bottom: 5px">The trade-off</div>
+      <div style="font-size: 0.8rem; color: #64748B; line-height: 1.6">The bar costs a wide column, so only one measure gets it and fewer columns fit. Rows are tall — about a third of Dense on screen. It exports poorly: a CSV keeps the number and loses the comparison entirely.</div>
+    </div>
+  </div>
+
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{}'>
+class Component extends DCLogic {
+  renderVals() {
+    const M = 18.56;                     // JLG median PAR 30+
+    const src = [
+      ['DUNGARA',        '₹4.92 Cr', '1,629', 26.90, 26.75],
+      ['JHALOD',         '₹5.35 Cr', '1,746', 26.89, 26.79],
+      ['BARMER',         '₹5.07 Cr', '1,675', 19.96, 19.80],
+      ['LIMKHEDA',       '₹5.12 Cr', '1,512', 18.13, 18.12],
+      ['KUKSHI',         '₹6.25 Cr', '1,888', 15.90, 15.70],
+      ['JHABUA',         '₹5.83 Cr', '1,748', 15.58, 15.42],
+      ['RAJGARH',        '₹5.60 Cr', '1,547', 15.49, 15.26],
+      ['BANSWARA',       '₹7.19 Cr', '2,122', 13.66, 13.40],
+      ['SURENDRA_NAGAR', '₹9.84 Cr', '2,534', 10.84, 10.67],
+      ['DALSINGHSARAI',  '₹5.59 Cr', '1,605',  0.23,  0.06]
+    ];
+    return {
+      minis: [
+        { title: 'Total POS', value: '₹418.50 Cr', delta: '▲ 2.4% vs Jul-26',    ink: '#16A34A' },
+        { title: '# Loans',   value: '123,345',    delta: '▲ 1.1% vs Jul-26',    ink: '#16A34A' },
+        { title: 'PAR 0+',    value: '18.24%',     delta: '▲ 0.31 pp vs Jul-26', ink: '#DC2626' },
+        { title: 'PAR 90+',   value: '16.92%',     delta: '▲ 0.24 pp vs Jul-26', ink: '#DC2626' }
+      ],
+      rows: src.map((s, i) => {
+        // Deviation from the benchmark, as a share of it, capped at 100% so one
+        // extreme branch cannot flatten every other bar into invisibility.
+        const dev = (s[3] - M) / M;
+        const pct = Math.min(Math.abs(dev), 1) * 50;
+        const worse = dev >= 0;
+        return {
+          rank: String(i + 1).padStart(2, '0'),
+          branch: s[0], pos: s[1], loans: s[2],
+          par30: s[3].toFixed(2) + '%', par90: s[4].toFixed(2) + '%',
+          ink: worse ? (dev >= 0.15 ? '#B91C1C' : '#92400E') : '#15803D',
+          barLeft: worse ? 50 : 50 - pct,
+          barWidth: pct,
+          barColor: worse ? (dev >= 0.5 ? '#DC2626' : dev >= 0.15 ? '#F59E0B' : '#FCD34D') : '#16A34A'
+        };
+      })
+    };
+  }
+}
+</script>
+</body>
+</html>

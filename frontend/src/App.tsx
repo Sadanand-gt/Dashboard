@@ -16,12 +16,15 @@ import { PosPar } from './pages/PosPar'
 import { WriteOff } from './pages/WriteOff'
 import { AumLive } from './pages/AumLive'
 import { BucketMovement } from './pages/BucketMovement'
-import { Delinquencies } from './pages/Delinquencies'
+import { Par60Collection } from './pages/Par60Collection'
 import { CaseMovement } from './pages/CaseMovement'
 import { Cashless } from './pages/Cashless'
 import { TrendMonthly } from './pages/TrendMonthly'
 import { AmlRiskCategory } from './pages/AmlRiskCategory'
 import { Ots } from './pages/Ots'
+import { PortfolioCuts } from './pages/PortfolioCuts'
+import { Vintage } from './pages/Vintage'
+import { OriginationFunnel } from './pages/OriginationFunnel'
 import { CreditBureau } from './pages/CreditBureau'
 import { UserManagement } from './pages/admin/UserManagement'
 import { Summary } from './pages/Summary'
@@ -77,12 +80,15 @@ export default function App() {
           <Route path="/dashboard/writeoff" element={<WriteOff />} />
           <Route path="/dashboard/aum-live" element={<AumLive />} />
           <Route path="/dashboard/bucket-movement" element={<BucketMovement />} />
-          <Route path="/dashboard/delinquencies" element={<Delinquencies />} />
+          <Route path="/dashboard/par60-collection" element={<Par60Collection />} />
           <Route path="/dashboard/case-movement" element={<CaseMovement />} />
           <Route path="/dashboard/cashless" element={<Cashless />} />
           <Route path="/dashboard/trend" element={<TrendMonthly />} />
           <Route path="/dashboard/aml" element={<AmlRiskCategory />} />
           <Route path="/dashboard/ots" element={<Ots />} />
+          <Route path="/dashboard/portfolio-cuts" element={<PortfolioCuts />} />
+          <Route path="/dashboard/vintage" element={<Vintage />} />
+          <Route path="/dashboard/origination-funnel" element={<OriginationFunnel />} />
           <Route path="/dashboard/credit-bureau" element={<CreditBureau />} />
         </Route>
       </Route>

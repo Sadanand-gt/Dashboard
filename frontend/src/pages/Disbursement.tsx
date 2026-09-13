@@ -201,10 +201,12 @@ export function Disbursement() {
     ? `Disbursements — ${ap1Label} × ${ap2Label}`
     : `Disbursements — ${ap1Label}`
 
-  // Sub-label helpers — MTD cards show PMTD comparison; YTD cards show the FY window.
-  const pmtdCountSub  = kpis ? `PMTD: ${fmtNum(kpis.pmtd_count)} loans` : ''
-  const pmtdAmountSub = kpis ? `PMTD: ${fmtInr(kpis.pmtd_amount)}`      : ''
-  const pmtdAvgSub    = kpis ? `PMTD avg: ${fmtInr(kpis.pmtd_avg)}`     : ''
+  // Sub-label helpers — MTD cards compare against PMSD (the business's name
+  // for the cumulative span to the same date last month, held in pmtd_*);
+  // YTD cards show the FY window.
+  const pmtdCountSub  = kpis ? `PMSD: ${fmtNum(kpis.pmtd_count)} loans` : ''
+  const pmtdAmountSub = kpis ? `PMSD: ${fmtInr(kpis.pmtd_amount)}`      : ''
+  const pmtdAvgSub    = kpis ? `PMSD avg: ${fmtInr(kpis.pmtd_avg)}`     : ''
   const ytdWindowSub  = 'FY: 1 Apr → T-1'
 
   return (
@@ -380,6 +382,10 @@ export function Disbursement() {
           </Box>
         )}
       </Paper>
+
+      {/* The "Disbursement by <dim>" bar chart was removed 2026-08-12: the
+          Analysis Parameter table above already carries every dimension it could
+          plot, with MTD and YTD side by side and the exact figures. */}
 
       {/* Disbursement is a point-in-time event, unaffected by write-off status,
           so the trend is fixed to one view (no W/O toggle); AP#1/AP#2 drive it. */}

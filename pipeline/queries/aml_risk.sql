@@ -55,13 +55,15 @@ il_loans AS (
         upper(nullif(btrim(bo.political_exposure_flag::text),'')) AS pep,
         upper(nullif(btrim(bo.work_abroad_flag::text), ''))     AS abroad,
         upper(nullif(btrim(bo.luc_india::text), ''))            AS luc,
+        upper(nullif(btrim(bo.citizenship::text), ''))          AS citizenship,
         coalesce(ipc.prod_classification, 'Other')              AS prod_classification
     FROM public.loan_account_il la
-    JOIN public.brrwroth_il bo ON bo.cust_id = la.cust_id
+    LEFT JOIN public.brrwroth_il bo ON bo.cust_id = la.cust_id
     LEFT JOIN il_prod_class ipc ON ipc.product_id = la.product_id::text
     WHERE la.status IN ('A','D','I')
       AND la.loan_id >= 10000000
-      AND (la.closure_date IS NULL OR la.closure_date::date > current_date)
+      -- T-1 anchor, matching aum_status: the warehouse holds through yesterday.
+      AND (la.closure_date IS NULL OR la.closure_date::date > current_date - 1)
 ),
 
 -- ── JLG active loans + borrower AML attributes ───────────────────────────────
@@ -78,14 +80,21 @@ jlg_loans AS (
         upper(nullif(btrim(bm.political_exposure_flag::text),'')) AS pep,
         upper(nullif(btrim(bm.work_abroad_flag::text), ''))     AS abroad,
         upper(nullif(btrim(bm.luc_india::text), ''))            AS luc,
+        upper(nullif(btrim(bm.citizenship::text), ''))          AS citizenship,
         coalesce(jpc.prod_classification, 'Other')              AS prod_classification
     FROM public.home_loan_account la
     JOIN public.home_center_master cm ON cm.center_id = la.center_id
-    JOIN public.home_brrwr_misc bm ON bm.cust_id = la.cust_id
+    -- LEFT, not INNER (fixed 2026-08-12). An inner join dropped 5,048 loans
+    -- (5,045 JLG + 3 IL) whose customer has no AML attribute row, so the report
+    -- silently excluded exactly the borrowers who have never been screened —
+    -- and left AML 5,048 loans short of Current Outstanding. They now surface as
+    -- Unclassified / Unknown, which is what they are.
+    LEFT JOIN public.home_brrwr_misc bm ON bm.cust_id = la.cust_id
     LEFT JOIN jlg_prod_class jpc ON jpc.product_id = la.product_id::text
     WHERE la.status IN ('A','D','I')
       AND la.loan_id >= 10000000
-      AND (la.closure_date IS NULL OR la.closure_date::date > current_date)
+      -- T-1 anchor, matching aum_status: the warehouse holds through yesterday.
+      AND (la.closure_date IS NULL OR la.closure_date::date > current_date - 1)
       AND NOT EXISTS (
           SELECT 1 FROM public.loan_account_il il
           WHERE il.loan_id = la.loan_id
@@ -110,7 +119,10 @@ enriched AS (
         CASE abroad WHEN 'Y' THEN 'Works Abroad' WHEN 'N' THEN 'Domestic'
              ELSE 'Unknown' END                                 AS work_abroad_flag,
         CASE luc    WHEN 'Y' THEN 'LUC Done' WHEN 'N' THEN 'LUC Pending'
-             ELSE 'Unknown' END                                 AS luc_flag
+             ELSE 'Unknown' END                                 AS luc_flag,
+        -- Question 4 of Client Risk Categorization. Raw declared value, not a
+        -- Y/N: a non-Indian nationality is the whole point of asking.
+        coalesce(citizenship, 'Unknown')                        AS nationality
     FROM all_loans al
 )
 
@@ -122,6 +134,7 @@ SELECT
     e.pep_flag,
     e.work_abroad_flag,
     e.luc_flag,
+    e.nationality,
     coalesce(h.zone_name,    'Unassigned')          AS zone_name,
     coalesce(h.cluster_name, 'Unassigned')          AS cluster_name,
     coalesce(h.region_name,  'Unassigned')          AS region_name,
@@ -153,7 +166,7 @@ FROM enriched e
 LEFT JOIN hierarchy h ON e.branch_id = h.branch_id
 GROUP BY
     e.loan_source, e.business_segment,
-    e.risk_category, e.pep_flag, e.work_abroad_flag, e.luc_flag,
+    e.risk_category, e.pep_flag, e.work_abroad_flag, e.luc_flag, e.nationality,
     h.zone_name, h.cluster_name, h.region_name, h.area_name, h.branch_name,
     h.zone_id, h.cluster_id, h.region_id, h.area_id,
     e.branch_id, e.lo_id, e.prod_classification,

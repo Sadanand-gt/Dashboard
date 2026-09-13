@@ -10,13 +10,15 @@ core/reports_catalog.py keeps working with no changes.
 Reads go through read_report(), so the user's data scope applies automatically.
 """
 
+from datetime import date
 from typing import Optional
 
+import numpy as np
 import pandas as pd
 from fastapi import APIRouter, Depends, Query
 
 from auth.deps import get_current_user
-from core.db import read_report
+from core.db import read_report, read_report_at_days, report_days, reports_conn
 from core.filters import hier, multi, segment_filter
 
 router = APIRouter()
@@ -113,6 +115,47 @@ SPECS: dict = {
         "filter_col": "pull_year",
         "filter_label": "Pull Year",
     },
+    "portfolio_cuts": {
+        "table": "rpt_portfolio_cuts",
+        # Month-end history, each entry the book RECOMPUTED at that date (POS and
+        # DPD rebuilt from repayment history) — not an old daily snapshot. Built
+        # by pipeline/gen_portfolio_cuts_asof.py. Declaring it here is what makes
+        # ?as_on= work on this report.
+        "hist_table": "rpt_portfolio_cuts_hist",
+        # One tall table holding 11 cuts. The page picks a cut_type; cut_value is
+        # then the row dimension. cut_rank carries the intended band order so
+        # "1 - 12 M" never sorts after "> 36 M".
+        "dims": {**COMMON_DIMS,
+                 "business_segment": ("Business Segment", "business_segment"),
+                 "cut_value":        ("Cut",              "cut_value"),
+                 "loan_status":      ("Loan Status",      "loan_status")},
+        "sums": ["n_regular", "n_1_30", "n_31_60", "n_61_90", "n_91_180",
+                 "n_181_360", "n_360_plus", "n_total",
+                 "pos_regular", "pos_1_30", "pos_31_60", "pos_61_90", "pos_91_180",
+                 "pos_181_360", "pos_360_plus", "pos_total",
+                 "par0_pos", "par30_pos", "par60_pos", "par90_pos",
+                 "wo3m_count", "wo3m_amount"],
+        # Derived from the POS sums, never stored, so they stay correct under any
+        # grouping. par60_pct reproduces the Excel sheet's "PAR > 90 %" column,
+        # which is arithmetically DPD > 60 — see portfolio_cuts.sql.
+        "ratios": {"par0_pct":  ("par0_pos",  "pos_total"),
+                   "par30_pct": ("par30_pos", "pos_total"),
+                   "par60_pct": ("par60_pos", "pos_total"),
+                   "par90_pct": ("par90_pos", "pos_total")},
+        # These describe the written-off book, so they survive the Excl-W/O view.
+        "portfolio_exempt_sums": ["wo3m_count", "wo3m_amount"],
+        # data_date, not report_day: read_report already filters to the latest
+        # report_day and drops the column, and data_date is the more honest
+        # label anyway — it is the T-1 date the figures describe, not the date
+        # the pipeline happened to run.
+        # Bands must never sort alphabetically ("1 - 12 M" after "> 36 M").
+        # cut_rank is written by the pipeline and carries the intended order.
+        "order_col": "cut_rank",
+        "date_col": "data_date",
+        "filter_col": "cut_type",
+        "filter_label": "Portfolio Cut",
+    },
+
     "ots": {
         "table": "rpt_ots",
         # business_segment is a REAL column here (IEL / LAP / JLG) — override the
@@ -139,10 +182,18 @@ SPECS: dict = {
         "table": "rpt_writeoff",
         # writeoff_year is derived below from writeoff_month ('YYYY-MM') — no DDL
         # change needed, and it doubles as the post-write-off recovery vintage.
-        "dims": {**COMMON_DIMS, "product_id": ("Product", "product_id"),
-                 "writeoff_year": ("Write-off Year", "writeoff_year"),
+        "dims": {**COMMON_DIMS,
+                 # real segment (JLG / IEL / LAP), derived from product_id below
+                 "business_segment": ("Business Segment", "business_segment"),
+                 "loan_source":    ("Loan Source",    "loan_source"),
+                 "product_id":     ("Product",        "product_id"),
+                 "writeoff_year":  ("Write-off Year", "writeoff_year"),
                  "writeoff_month": ("Write-off Month", "writeoff_month")},
-        "sums": ["writeoff_count", "writeoff_amount", "sanctioned_amount",
+        "segment_from_product": True,
+        # "sanctioned_amount" dropped 2026-08-12: it is the loan's ORIGINAL
+        # sanction, not a write-off figure, and beside the write-off amount it
+        # read as though the two were comparable.
+        "sums": ["writeoff_count", "writeoff_amount",
                  "recovery_amount", "net_credit_loss"],
         "ratios": {"recovery_pct": ("recovery_amount", "writeoff_amount")},
         "date_col": "report_day",
@@ -153,12 +204,72 @@ SPECS: dict = {
     "case_movement": {
         "table": "rpt_case_movement",
         "dims": COMMON_DIMS,
+        # CGT and GRT each carry BOTH periods. Only cgt1_t1 and grt1_mtd used to
+        # be listed, so a caller taking "the CGT number" and "the GRT number"
+        # got yesterday's training against the month's recognition tests.
         "sums": ["new_clients_t1", "booked_t1", "sanctioned_t1", "rejected_t1",
                  "disbursed_t1_count", "disbursed_t1_amount",
                  "new_clients_mtd", "booked_mtd", "sanctioned_mtd", "rejected_mtd",
+                 "rejected_post_pd_mtd",
                  "disbursed_mtd_count", "disbursed_mtd_amount", "total_apps_mtd",
-                 "cb_checked_total", "approved_total", "cgt1_t1", "grt1_mtd"],
-        "ratios": {"approval_ratio_total": ("approved_total", "cb_checked_total")},
+                 "cb_checked_total", "approved_total",
+                 "cgt1_t1", "cgt1_mtd", "grt1_t1", "grt1_mtd",
+                 # Stage counts the funnel needs to be readable as a funnel.
+                 # Their ratios are derived below rather than read off the
+                 # table's own approval_ratio_nc / _ec columns: those are
+                 # per-branch percentages, and summing or averaging a percentage
+                 # across branches weights a 3-application branch the same as a
+                 # 300-application one.
+                 "pd_done_t1", "pd_done_mtd", "duplicate_mtd",
+                 "cb_checked_nc_mtd", "approved_nc_mtd",
+                 "cb_checked_ec_mtd", "approved_ec_mtd",
+                 "cb_checked_t1", "approved_t1"],
+        # NOT SUMMABLE, deliberately absent: tat_days_mtd is a per-branch MEDIAN
+        # (percentile_cont(0.5) in case_movement.sql). Adding it to `sums` would
+        # total medians; putting it in `averages` would average medians. Neither
+        # is the firm's median TAT, and the underlying day counts are not carried
+        # on this table, so it cannot be aggregated correctly here at all.
+        #
+        # Every ratio below is recomputed from SUMMED numerator and denominator
+        # at whatever grouping the page asks for, so a region's rate is its own
+        # weighted rate and never an average of its branches' rates.
+        "ratios": {
+            # Sanctioned / CB screened. The SANCTION stage's own rate — the .pbit
+            # "Approval Ratio %" measure — NOT the BRE engine's approval rate,
+            # which has a different denominator entirely.
+            "approval_ratio_total": ("approved_total", "cb_checked_total"),
+            # DELIBERATELY NOT HERE — approval_ratio_nc / approval_ratio_ec.
+            # They look like the sharpest cut on the page (~1% for new clients
+            # against ~45% for existing) but the split is CIRCULAR, so the number
+            # measures its own definition:
+            #   case_movement.sql derives cust_type from
+            #       existing_cust_jlg = SELECT DISTINCT cust_id
+            #                           FROM home_loan_account
+            #   with NO as-of date. Once an application is sanctioned the customer
+            #   HAS a loan row, so they are reclassified 'EC' retroactively —
+            #   including on their own first-ever application. 'NC' therefore
+            #   means little more than "has no loan today", which is mostly the
+            #   CONSEQUENCE of not being sanctioned.
+            # Measured on completed months, JLG non-topup, sanctioned-ever with no
+            # month cut-off (so this is not MTD truncation):
+            #   Mar 0/9,991   Apr 4/7,759   May 1/2,488   Jun 4/6,490   Jul 0/6,944
+            #   = 9 of 33,672 (0.03%), against 35-49% for EC at 2-3 days to sanction.
+            # Two months at exactly 0.00% is the structural-zero signature, not a
+            # credit outcome. Fixing it needs cust_type evaluated AS AT the
+            # application date; until then neither rate belongs on a page.
+            # Of everything sanctioned this month, how much actually went out.
+            "disbursal_rate": ("disbursed_mtd_count", "sanctioned_mtd"),
+            # Of the rejections, the share that had already been through Personal
+            # Discussion. Work that reached PD and then failed cost a field visit;
+            # work screened out at the bureau cost a query. JLG only — IL carries
+            # no pd_remarks, so it reports 0 by construction.
+            "post_pd_reject_pct": ("rejected_post_pd_mtd", "rejected_mtd"),
+            "pd_coverage_pct": ("pd_done_mtd", "cb_checked_total"),
+            "duplicate_pct": ("duplicate_mtd", "total_apps_mtd"),
+            # JLG group formation: recognition tests passed against trainings run.
+            "grt_completion_pct": ("grt1_mtd", "cgt1_mtd"),
+        },
+        "averages": {"avg_ticket": ("disbursed_mtd_amount", "disbursed_mtd_count")},
         "date_col": "report_date",
     },
 }
@@ -195,9 +306,19 @@ def _filters(
 
 
 def _summary(key: str, group_by: str, group_by_2: Optional[str],
-             variant: Optional[str], f: dict) -> dict:
+             variant: Optional[str], f: dict, as_on: Optional[str] = None) -> dict:
     spec = SPECS[key]
-    df = read_report(spec["table"])
+    # AS-ON: a report declaring `hist_table` can be read at any stored month-end
+    # instead of live. The history table holds the book RECOMPUTED at that date
+    # (POS and DPD rebuilt from repayment history), not a copy of a past daily
+    # run — see pipeline/queries/portfolio_cuts_asof.sql.
+    hist = spec.get("hist_table")
+    if as_on and hist:
+        df = read_report_at_days(hist, [as_on])
+        if "report_day" in df.columns:
+            df = df.drop(columns=["report_day"])
+    else:
+        df = read_report(spec["table"])
     fcol = spec.get("filter_col")
     empty = {"rows": [], "grand": {}, "as_of": None,
              "dims": [{"value": k, "label": v[0]} for k, v in spec["dims"].items()],
@@ -228,14 +349,43 @@ def _summary(key: str, group_by: str, group_by_2: Optional[str],
     if vcol and vcol in df.columns:
         df = df[df[vcol].astype(str) == (variant or spec["variant_default"])]
 
+    # Some report tables carry only loan_source (IL/JLG) but do carry product_id.
+    # Derive the real business segment here rather than asking the DBA for a
+    # column: the rule is the same one the SQL layer uses (SUGAM / UDYOGINI /
+    # SECURED -> LAP), so IEL and LAP are reported exactly as elsewhere.
+    if spec.get("segment_from_product") and "product_id" in df.columns:
+        prod = df["product_id"].astype(str).str.upper().str.strip()
+        is_lap = (prod.str.contains("SUGAM", na=False)
+                  | prod.str.contains("UDYOGINI", na=False)
+                  | prod.str.contains("SECURED", na=False))
+        src = df["loan_source"].astype(str) if "loan_source" in df.columns else ""
+        df["business_segment"] = np.where(src == "JLG", "JLG",
+                                          np.where(is_lap, "LAP", "IEL"))
+
     as_of = None
     dcol = spec.get("date_col")
     if dcol and dcol in df.columns and not df.empty:
         as_of = str(df[dcol].max())
+    elif not df.empty:
+        # read_report filters to the newest report_day and drops the column, so a
+        # spec whose date_col IS report_day is left with nothing to stamp (the
+        # Write-off page showed "As of —"). Ask the store for the day it served.
+        as_of = _latest_report_day(spec["table"])
 
     # Portfolio: "without" = Excl W/O — drop written-off loans so PAR/POS match
     # Excel + Current Outstanding (mirrors ageing/od_status/dq_category/collection).
+    #
+    # "portfolio_exempt_sums" are measures that describe the WRITTEN-OFF book
+    # itself and therefore live on loan_status='Write-off' rows. Dropping those
+    # rows would zero the measure, so their per-group totals are taken BEFORE the
+    # filter and merged back afterwards. Portfolio Cuts needs this: its
+    # "write-off in last 3 months" columns sit beside live-book POS on the same
+    # Excel row, and the Excl-W/O view must not blank them out.
+    exempt = [c for c in spec.get("portfolio_exempt_sums", []) if c in df.columns]
+    exempt_pre = None
     if (f.get("portfolio") or "with") == "without" and "loan_status" in df.columns:
+        if exempt:
+            exempt_pre = df.copy()
         df = df[df["loan_status"].astype(str) != "Write-off"]
 
     df = segment_filter(df, f.get("segment") or "ALL")
@@ -261,6 +411,7 @@ def _summary(key: str, group_by: str, group_by_2: Optional[str],
     for c in sums:
         df[c] = pd.to_numeric(df[c], errors="coerce").fillna(0)
 
+
     # "ratios" are PERCENTAGES (x100). "averages" are plain num/den — a per-pull
     # lender count or an average rupee amount must NOT be multiplied by 100
     # (avg_mfi_lenders rendered as 147.25 instead of 1.47 before this split).
@@ -278,15 +429,42 @@ def _summary(key: str, group_by: str, group_by_2: Optional[str],
     keys = [g1] + ([g2] if g2 else [])
     grouped = df.groupby(keys, dropna=False)[sums].sum().reset_index()
 
+    # Re-attach the write-off-book measures the Excl-W/O filter removed. Done
+    # AFTER grouping: merging pre-aggregation would broadcast each group's total
+    # onto every row of that group and the groupby would then multiply it.
+    if exempt_pre is not None and exempt:
+        for c in exempt:
+            exempt_pre[c] = pd.to_numeric(exempt_pre[c], errors="coerce").fillna(0)
+        add = exempt_pre.groupby(keys, dropna=False)[exempt].sum().reset_index()
+        grouped = grouped.drop(columns=exempt, errors="ignore").merge(add, on=keys, how="left")
+        for c in exempt:
+            grouped[c] = pd.to_numeric(grouped[c], errors="coerce").fillna(0)
+
     rows = []
     for _, r in grouped.iterrows():
         rec = {"name": str(r[g1]), **{c: round(float(r[c]), 2) for c in sums}}
         if g2:
             rec["name2"] = str(r[g2])
         rows.append(derive(rec))
-    rows.sort(key=lambda x: (_order_key(g1, x["name"]), _order_key(g2 or "", x.get("name2", ""))))
+    # An "order_col" (e.g. cut_rank) is authoritative when present: it is written
+    # by the pipeline precisely so bands do not sort as text. Falls back to
+    # _order_key, which handles the canonical DPD bucket order.
+    ocol = spec.get("order_col")
+    if ocol and ocol in df.columns:
+        rank = (df.groupby(keys, dropna=False)[ocol].max().reset_index()
+                  .set_index([str(k) for k in keys] if False else keys)[ocol].to_dict())
+        def _rank_of(rec):
+            k = (rec["name"],) if not g2 else (rec["name"], rec.get("name2"))
+            v = rank.get(k[0] if len(k) == 1 else k)
+            return (0, float(v)) if v is not None else (1, 0.0)
+        rows.sort(key=lambda x: (_rank_of(x), str(x["name"]), str(x.get("name2", ""))))
+    else:
+        rows.sort(key=lambda x: (_order_key(g1, x["name"]), _order_key(g2 or "", x.get("name2", ""))))
 
-    grand = derive({c: round(float(df[c].sum()), 2) for c in sums})
+    _gsrc = {c: (exempt_pre[c] if (exempt_pre is not None and c in exempt) else df[c])
+             for c in sums}
+    grand = derive({c: round(float(pd.to_numeric(v, errors="coerce").fillna(0).sum()), 2)
+                    for c, v in _gsrc.items()})
     grand["name"] = "Grand Total"
 
     return {"rows": rows, "grand": grand, "as_of": as_of,
@@ -294,15 +472,34 @@ def _summary(key: str, group_by: str, group_by_2: Optional[str],
             "filter": empty["filter"]}
 
 
+_LATEST_DAY_CACHE: dict = {}
+
+
+def _latest_report_day(table: str):
+    """Newest report_day held for a table, cached per process. Returns None when
+    the table has no report_day, so the caller simply shows no stamp."""
+    if table not in _LATEST_DAY_CACHE:
+        try:
+            with reports_conn() as c:
+                v = pd.read_sql(f"SELECT max(report_day) d FROM {table}", c).iloc[0, 0]
+            _LATEST_DAY_CACHE[table] = str(v) if v is not None else None
+        except Exception:
+            _LATEST_DAY_CACHE[table] = None
+    return _LATEST_DAY_CACHE[table]
+
+
 def _make(key: str):
     def handler(
         group_by: str = Query("business_segment"),
         group_by_2: Optional[str] = Query(None),
         variant: Optional[str] = Query(None),
+        # Month-end to report as at, YYYY-MM-DD. Ignored by reports with no
+        # hist_table; omitted means the live book.
+        as_on: Optional[str] = Query(None),
         f: dict = Depends(_filters),
         user: dict = Depends(get_current_user),
     ):
-        return _summary(key, group_by, group_by_2, variant, f)
+        return _summary(key, group_by, group_by_2, variant, f, as_on)
     return handler
 
 
@@ -314,4 +511,47 @@ router.add_api_route("/delinquencies/summary", _make("delinquencies"), methods=[
 router.add_api_route("/case-movement/summary", _make("case_movement"), methods=["GET"])
 router.add_api_route("/writeoff/summary", _make("writeoff"), methods=["GET"])
 router.add_api_route("/ots/summary", _make("ots"), methods=["GET"])
+router.add_api_route("/portfolio-cuts/summary", _make("portfolio_cuts"), methods=["GET"])
+
+
+# Indian financial year: April to March. FY25-26 closes on 31-Mar-2026.
+def _fy_label(d: date) -> str:
+    y = d.year if d.month >= 4 else d.year - 1
+    return f"FY{str(y)[2:]}-{str(y + 1)[2:]}"
+
+
+@router.get("/portfolio-cuts/periods")
+def portfolio_cuts_periods(user: dict = Depends(get_current_user)):
+    """Which as-on periods this report can serve, newest first.
+
+    Two ways to ask for a point in time, both resolving to a stored month-end:
+
+      months — every month-end held in the history table
+      fys    — one entry per financial year, resolving to that FY's CLOSING
+               month-end. Portfolio Cuts is a stock report, so "as on FY25-26"
+               can only sensibly mean the position at 31-Mar-2026. An FY still in
+               progress resolves to its latest stored month instead, and says so
+               via `partial`, because a live FY has no close yet.
+
+    `live` is the current book — the default the page opens on.
+    """
+    days = report_days(SPECS["portfolio_cuts"]["hist_table"])
+    months = [{"value": d, "label": date.fromisoformat(d).strftime("%b %Y")}
+              for d in sorted(days, reverse=True)]
+
+    by_fy: dict[str, list[str]] = {}
+    for d in sorted(days):
+        by_fy.setdefault(_fy_label(date.fromisoformat(d)), []).append(d)
+    fys = []
+    for label, ds in sorted(by_fy.items(), reverse=True):
+        close = ds[-1]
+        is_close = date.fromisoformat(close).month == 3
+        fys.append({"value": close, "label": label, "partial": not is_close,
+                    "as_on_label": date.fromisoformat(close).strftime("%d %b %Y"),
+                    "months": len(ds)})
+
+    live = read_report("rpt_portfolio_cuts")
+    live_date = (str(pd.to_datetime(live["data_date"]).max().date())
+                 if not live.empty and "data_date" in live.columns else None)
+    return {"months": months, "fys": fys, "live_date": live_date}
 router.add_api_route("/credit-bureau/summary", _make("credit_bureau"), methods=["GET"])

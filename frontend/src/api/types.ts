@@ -12,6 +12,7 @@ export interface User {
   scope_value?: string | null          // comma-separated for multi
   allowed_reports?: string[]           // ['*'] = all reports
   designation_type?: string | null      // hierarchy designation from Ananya Sathi
+  can_export?: boolean                 // CSV export privilege — off unless granted
   cluster_id?: string | null
   region_id?: string | null
   area_id?: string | null
@@ -125,10 +126,12 @@ export interface UserCreate {
   username: string
   role: Role
   reports?: string[]        // undefined/[] = all reports allowed
+  can_export?: boolean      // CSV export — off unless granted
 }
 
 export interface UserUpdate {
   role?: Role
   is_active?: boolean
   reports?: string[]              // undefined = unchanged; [] = all allowed
+  can_export?: boolean            // undefined = unchanged
 }

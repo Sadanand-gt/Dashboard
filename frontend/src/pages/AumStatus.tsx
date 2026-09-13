@@ -18,9 +18,26 @@ import Divider from '@mui/material/Divider'
 import Tooltip from '@mui/material/Tooltip'
 import { api } from '../api/client'
 import { KpiCard } from '../components/KpiCard'
+import { ExportCsvButton } from '../components/ExportCsvButton'
 import { useSlicerParams } from '../store/filterStore'
+import { heatBand, heatStyle, spineColor, median } from '../components/heat'
 import type { AumKpis } from '../api/types'
 import { TrendSection } from '../components/TrendSection'
+
+const AUM_EXPORT_COLS: [string, string][] = [
+  ['loan_id', 'Loan ID'], ['loan_source', 'Loan Source'],
+  ['business_segment', 'Business Segment'], ['loan_status', 'Loan Status'],
+  ['dpd', 'DPD'], ['dpd_bucket', 'OD Bucket'], ['curr_od_status', 'OD Status'],
+  ['bucket_movement', 'Bucket Movement'],
+  ['pos', 'POS'], ['total_arrear', 'Total Arrear'],
+  ['disbursement_date', 'Disbursement Date'], ['total_loan_amount', 'Sanctioned Amount'],
+  ['zone_name', 'Zone'], ['cluster_name', 'Cluster'], ['region_name', 'Region'],
+  ['area_name', 'Unit'], ['branch_name', 'Branch'], ['branch_id', 'Branch ID'],
+  ['lo_id', 'Loan Officer ID'], ['prod_classification', 'Prod. Classification'],
+  ['state_id', 'State'], ['district_id', 'District'], ['disb_year', 'Disbursement Year'],
+  ['cycle_no', 'Cycle'], ['purpose_id', 'Purpose'], ['facility_id', 'Facility'],
+  ['lender_id', 'Lender'], ['caste', 'Caste'], ['religion', 'Religion'],
+]
 
 const SEGMENT_COLORS: Record<string, string> = {
   IEL: '#1565C0', JLG: '#16A34A', LAP: '#7C3AED',
@@ -66,13 +83,12 @@ function fmtInr(v: number): string {
 function fmtPct(v: number): string { return `${(v ?? 0).toFixed(2)}%` }
 function fmtNum(v: number): string { return (v ?? 0).toLocaleString('en-IN') }
 
-function parColor(pct: number): string {
-  if (pct === 0)  return '#16A34A'
-  if (pct < 2)    return '#65A30D'
-  if (pct < 5)    return '#D97706'
-  if (pct < 10)   return '#DC2626'
-  return '#7F1D1D'
-}
+// parColor() used to live here — absolute cutoffs (0 / <2 / <5 / <10 / else)
+// applied to all four PAR columns at once. On this book JLG runs at 17.55% and
+// LAP at 3.60%, so every JLG row came out the darkest red and every LAP row
+// green, which is a statement about the products, not about the branches.
+// Shading now comes from components/heat.ts and is measured against this
+// report's own benchmark. See [[heat.ts]] for the bands.
 
 interface GroupRow {
   name: string; name2?: string
@@ -115,7 +131,7 @@ export function AumStatus() {
   const [sortDir, setSortDir] = useState<'asc' | 'desc'>('desc')
   const [ap1, setAp1] = useState('business_segment')
   const [ap2, setAp2] = useState('none')
-  const [includeWO, setIncludeWO] = useState(true)
+  const [includeWO, setIncludeWO] = useState(false)  // default Excl. W/O — the active portfolio, consistent across every page
 
   const slicerParams = useSlicerParams()
 
@@ -126,6 +142,14 @@ export function AumStatus() {
       : ['Active', 'Death']
     return { ...slicerParams, loan_status: base.join(',') || 'Active,Death' }
   }, [slicerParams, includeWO])
+
+  // Loan rows fetched on click, not held in the page — see ExportCsvButton.
+  // portfolio mirrors the page's With/Excl W/O toggle so the file matches the
+  // cards: 'with' = Active+Death+Write-off, 'without' = the active portfolio.
+  const fetchExportRows = async () =>
+    (await api.get('/api/aum/loans', {
+      params: { ...slicerParams, portfolio: includeWO ? 'with' : 'without' },
+    })).data.rows as Record<string, any>[]
 
   const tableQueryParams = useMemo(() => ({
     ...params, group_by: ap1, ...(ap2 !== 'none' ? { group_by_2: ap2 } : {}),
@@ -155,14 +179,44 @@ export function AumStatus() {
     return grand ? [...body, grand] : body
   }, [tableRows, sortField, sortDir])
 
+  const ap1Label = DIM_OPTIONS.find((o) => o.value === ap1)?.label ?? 'Segment'
+  const ap2Label = DIM_OPTIONS.find((o) => o.value === ap2)?.label ?? ''
+  const hasAp2 = ap2 !== 'none'
+
+  // ── Conditional formatting ────────────────────────────────────────────────
+  // Benchmark: the segment median when grouped two deep, so a branch is judged
+  // against its own book; otherwise the Grand Total, which this table already
+  // carries as a row. PAR 0+ is the primary — it drives the row spine and takes
+  // the only filled cell, so the other three PAR columns stay readable.
+  const grandRow = useMemo(() => tableRows.find((r) => r.name === 'Grand Total'), [tableRows])
+  const bodyRows = useMemo(() => tableRows.filter((r) => r.name !== 'Grand Total'), [tableRows])
+
+  const benchFor = useMemo(() => {
+    const PAR: (keyof GroupRow)[] = ['par0_pct', 'par30_pct', 'par60_pct', 'par90_pct']
+    if (!hasAp2) {
+      const g = new Map<string, number | null>()
+      for (const f of PAR) g.set(f as string, Number(grandRow?.[f] ?? NaN) || null)
+      return (_r: GroupRow, f: string) => g.get(f) ?? null
+    }
+    const bySeg = new Map<string, Map<string, number | null>>()
+    for (const r of bodyRows) {
+      const k = String(r.name2 ?? '—')
+      if (!bySeg.has(k)) bySeg.set(k, new Map())
+    }
+    for (const [k, m] of bySeg) {
+      const grp = bodyRows.filter((r) => String(r.name2 ?? '—') === k)
+      for (const f of PAR) m.set(f as string, median(grp.map((r) => Number(r[f] ?? NaN))))
+    }
+    return (r: GroupRow, f: string) => bySeg.get(String(r.name2 ?? '—'))?.get(f) ?? null
+  }, [hasAp2, bodyRows, grandRow])
+
+
+
   const handleSort = (field: keyof GroupRow) => {
     if (field === sortField) setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
     else { setSortField(field); setSortDir('desc') }
   }
 
-  const ap1Label = DIM_OPTIONS.find((o) => o.value === ap1)?.label ?? 'Segment'
-  const ap2Label = DIM_OPTIONS.find((o) => o.value === ap2)?.label ?? ''
-  const hasAp2 = ap2 !== 'none'
   const tableTitle = hasAp2 ? `Current Outstanding — ${ap1Label} × ${ap2Label}` : `Current Outstanding — ${ap1Label}`
 
   return (
@@ -177,6 +231,9 @@ export function AumStatus() {
         <Divider orientation="vertical" flexItem sx={{ mx: 0.25, height: 20, alignSelf: 'center' }} />
         <DimSelect label="AP #1" value={ap1} options={DIM_OPTIONS} onChange={setAp1} />
         <DimSelect label="AP #2" value={ap2} options={AP2_OPTIONS} onChange={setAp2} />
+        <Box sx={{ flex: 1 }} />
+        <ExportCsvButton rows={[]} columns={AUM_EXPORT_COLS}
+          fetchRows={fetchExportRows} filename="current_outstanding_loans" />
         <Divider orientation="vertical" flexItem sx={{ mx: 0.25, height: 20, alignSelf: 'center' }} />
         <Box sx={{ display: 'flex', alignItems: 'center', gap: 0.6, flexShrink: 0 }}>
           <Box sx={{ fontSize: '0.6rem', color: '#64748B', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.07em' }}>Portfolio</Box>
@@ -232,7 +289,10 @@ export function AumStatus() {
                   const isGrand = row.name === 'Grand Total'
                   return (
                     <TableRow key={idx} sx={isGrand ? { borderTop: '2px solid #BFDBFE', background: '#EFF6FF', '& td': { fontWeight: 700, color: '#1E40AF' } } : { '&:hover': { background: '#F8FAFF' } }}>
-                      <TableCell>
+                      {/* Severity spine: an exception row is findable before a
+                          single number is read. Neutral rows carry none. */}
+                      <TableCell sx={{ borderLeft: `4px solid ${isGrand ? 'transparent'
+                        : spineColor(heatBand(row.par0_pct, benchFor(row, 'par0_pct'), 'bad-high', row.pos))}` }}>
                         <Box sx={{ display: 'flex', alignItems: 'center', gap: 1 }}>
                           {ap1 === 'business_segment' && !isGrand && (
                             <Box sx={{ width: 7, height: 7, borderRadius: '50%', flexShrink: 0, background: SEGMENT_COLORS[row.name] ?? '#D97706' }} />
@@ -241,12 +301,16 @@ export function AumStatus() {
                         </Box>
                       </TableCell>
                       {hasAp2 && <TableCell sx={{ color: '#475569' }}>{row.name2 ?? '—'}</TableCell>}
-                      <TableCell align="right" sx={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '0.78rem', whiteSpace: 'nowrap' }}>{fmtInr(row.pos)}</TableCell>
+                      <TableCell align="right" sx={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '0.78rem', whiteSpace: 'nowrap' }}>
+                        {fmtInr(row.pos)}
+                      </TableCell>
                       <TableCell align="right" sx={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '0.78rem' }}>{fmtNum(row.loans)}</TableCell>
-                      <PctCell value={row.par0_pct} />
-                      <PctCell value={row.par30_pct} />
-                      <PctCell value={row.par60_pct} />
-                      <PctCell value={row.par90_pct} />
+                      {/* The Grand Total IS the benchmark in the one-deep case,
+                          so it is never shaded against itself. */}
+                      <PctCell value={row.par0_pct}  band={isGrand ? null : heatBand(row.par0_pct,  benchFor(row, 'par0_pct'),  'bad-high', row.pos)} primary />
+                      <PctCell value={row.par30_pct} band={isGrand ? null : heatBand(row.par30_pct, benchFor(row, 'par30_pct'), 'bad-high', row.pos)} />
+                      <PctCell value={row.par60_pct} band={isGrand ? null : heatBand(row.par60_pct, benchFor(row, 'par60_pct'), 'bad-high', row.pos)} />
+                      <PctCell value={row.par90_pct} band={isGrand ? null : heatBand(row.par90_pct, benchFor(row, 'par90_pct'), 'bad-high', row.pos)} />
                     </TableRow>
                   )
                 })}
@@ -258,6 +322,10 @@ export function AumStatus() {
           </Box>
         )}
       </Paper>
+
+      {/* The "AUM by <dim>" bar chart was removed 2026-08-12: the Analysis
+          Parameter table above already carries every dimension it could plot,
+          broken down further and with the exact figures. */}
 
       {/* One portfolio control for the whole page: the KPI cards, the Analysis
           Parameter table and the trend all follow `includeWO`. AP#1/AP#2 drive
@@ -273,13 +341,13 @@ export function AumStatus() {
 }
 
 // ── Sub-components ────────────────────────────────────────────────────────────
-// Conditional formatting: green (healthy) → amber (watch) → red (risk).
-// Cell background intensity follows the PAR level; highest levels darkest red.
-function PctCell({ value }: { value: number }) {
-  const c = parColor(value)
+/** A PAR cell shaded against the report's benchmark. Only the PRIMARY column
+ *  takes a filled background — the other three take colour and weight alone, so
+ *  four near-identical PAR figures do not become one solid red block. */
+function PctCell({ value, band, primary = false }: { value: number; band: number | null; primary?: boolean }) {
   return (
-    <TableCell align="right" sx={{ background: `${c}14`, borderLeft: '1px solid rgba(0,0,0,0.03)' }}>
-      <Box component="span" sx={{ fontFamily: 'JetBrains Mono, monospace', fontSize: '0.74rem', fontWeight: 700, color: c }}>
+    <TableCell align="right" sx={{ borderLeft: '1px solid rgba(0,0,0,0.03)', ...heatStyle(band, primary) }}>
+      <Box component="span" sx={{ fontFamily: 'JetBrains Mono, monospace', fontSize: primary ? '0.78rem' : '0.74rem' }}>
         {fmtPct(value)}
       </Box>
     </TableCell>

@@ -16,8 +16,13 @@ export interface FilterState {
 
 export const useFilterStore = create<FilterState>((set, get) => ({
   selections: {},
-  panelOpen: true,
-  sidebarOpen: true,
+  // Collapsed by default: the slicers are an occasional action, not a
+  // permanent fixture, and the reports need the width more than the
+  // panel does. The user opens it from the right-edge strip.
+  panelOpen: false,
+  // Nav collapses to an icon rail by default too — these reports are wide and
+  // the rail still shows every destination.
+  sidebarOpen: false,
 
   setSelection: (id, values) =>
     set((s) => {
@@ -68,6 +73,7 @@ const SLICER_TO_PARAM: Record<string, string> = {
   od_movement:     'od_movement',
   bucket_movement: 'bucket_movement',
   loan_status:     'loan_status',
+  status_code:     'status_code',
   branch_state:    'branch_state',
   district:        'district',
   lo:              'lo',

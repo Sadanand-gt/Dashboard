@@ -1,6 +1,7 @@
 import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import Box from '@mui/material/Box'
+import Button from '@mui/material/Button'
 import Paper from '@mui/material/Paper'
 import Table from '@mui/material/Table'
 import TableHead from '@mui/material/TableHead'
@@ -83,6 +84,8 @@ interface Resp {
 }
 
 export function CreditBureau() {
+  // Charts are opt-in and start hidden, matching every other page.
+  const [showCharts, setShowCharts] = useState(false)
   const [ap1, setAp1] = useState('decision')
   const [ap2, setAp2] = useState('none')
   const [year, setYear] = useState('ALL')
@@ -266,6 +269,14 @@ export function CreditBureau() {
           sub={g ? `${fmtInr(g.avg_emi_other)} avg EMI elsewhere` : ''} variant="amber" loading={loading} />
       </Box>
 
+      {/* Charts are opt-in and start hidden, matching every other page. */}
+      <Box sx={{ display: 'flex', justifyContent: 'flex-end' }}>
+        <Button size="small" variant="outlined" onClick={() => setShowCharts((v) => !v)}
+          sx={{ fontSize: '0.68rem', textTransform: 'none', py: 0.2, px: 1.2, whiteSpace: 'nowrap' }}>
+          {showCharts ? 'Hide charts' : 'Show charts'}
+        </Button>
+      </Box>
+      {showCharts && (<>
       {/* ── Row 1: decision mix over time + risk profile ───────────────────── */}
       <Box className="grid grid-cols-1 lg:grid-cols-3 gap-3">
         <Paper sx={{ overflow: 'hidden', '@media (min-width:1024px)': { gridColumn: 'span 2' } }}>
@@ -384,6 +395,7 @@ export function CreditBureau() {
           </Box>
         </Paper>
       </Box>
+      </>)}
 
       {/* ── Detail table ───────────────────────────────────────────────────── */}
       <Paper sx={{ overflow: 'hidden' }}>

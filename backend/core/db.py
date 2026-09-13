@@ -146,3 +146,5 @@ def read_report_at_days(table: str, days: list[str]) -> pd.DataFrame:
         from .scope import scope_df
         df = scope_df(df, user)
     return df
+
+

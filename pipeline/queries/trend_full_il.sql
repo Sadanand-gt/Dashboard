@@ -22,8 +22,22 @@ wo_master AS (
     SELECT v.loan_id::bigint AS loan_id, v.wo_date::date AS wo_date
     FROM (VALUES {wo_pairs}) AS v(loan_id, wo_date)
 ),
-last_m AS (   -- last COMPLETED month
-    SELECT (date_trunc('month', current_date) - interval '1 month')::date AS m
+last_m AS (   -- last month IN the grid, now the CURRENT (partial) month
+    -- Changed 2026-08-13 (was: last COMPLETED month). The trend stopped at the
+    -- previous month-end, so the current month never appeared on any trend —
+    -- Write-off Recovery showed nothing for Aug-2026.
+    --
+    -- THE CURRENT MONTH IS MTD — 1st to T-1, because the warehouse only ever
+    -- holds through yesterday. That is the same basis as every other MTD measure
+    -- on the dashboard, not a defect: flows (collection, recovery, demand,
+    -- disbursement) are month-to-date and read low beside completed months by
+    -- definition; stocks (pos_eom, loans_eom, par*) are a valid T-1 snapshot.
+    --
+    -- For FLOW measures the backend supersedes this row with the live MTD figure
+    -- (_append_flow_live_point, trend.py:657) and sets partial_last, so the UI
+    -- labels the point "MTD, partial month" and dashes it. Both paths agree on
+    -- the basis; the engine row is what makes the month exist at all.
+    SELECT date_trunc('month', current_date)::date AS m
 ),
 
 hierarchy AS (
@@ -65,7 +79,14 @@ loans AS (
         CASE WHEN la.status = 'W'
                   OR (w.loan_id IS NOT NULL
                       AND (w.wo_date IS NULL OR la.disbursement_date::date <= w.wo_date))
-             THEN date_trunc('month', coalesce(la.writeoff_date, w.wo_date))::date END AS wo_month
+             THEN date_trunc('month', coalesce(la.writeoff_date, w.wo_date))::date END AS wo_month,
+        -- Same test, DAY precision. wo_recovery is measured against the write-off
+        -- DATE, not its month: a collection taken later in the write-off month is
+        -- still a recovery. Verified against Excel 2026-08-07 (Sep-25 within Rs 9).
+        CASE WHEN la.status = 'W'
+                  OR (w.loan_id IS NOT NULL
+                      AND (w.wo_date IS NULL OR la.disbursement_date::date <= w.wo_date))
+             THEN coalesce(la.writeoff_date, w.wo_date)::date END AS wo_dt
     FROM public.loan_account_il la
     -- history needs CLOSED loans too: status X = completed/closed (324k JLG /
     -- most IL history live there). Only 'R' (rejected) is excluded.
@@ -219,12 +240,39 @@ state AS (
         CASE WHEN l.is_death THEN 0 ELSE coalesce(dp.dpd, 0) END  AS dpd,
         -- staged loans: disbursed-so-far (audit principal_total) at month-end; else sanction.
         greatest(coalesce(ld.disbursed, l.orig_amount) - c.cum_coll_prin, 0)  AS pos,
+        l.is_death,
         l.branch_id, l.lo_id, l.business_segment, l.wo_month,
         l.disb_year, l.cycle_no, l.prod_classification
     FROM cums c
     JOIN loans l ON l.loan_id = c.loan_id
     LEFT JOIN dpd dp ON dp.loan_id = c.loan_id AND dp.m = c.m
     LEFT JOIN disb_asof ld ON ld.loan_id = c.loan_id AND ld.m = c.m
+),
+
+-- Collections from loans that were PAR>60 at the PREVIOUS month-end.
+--
+-- Split deliberately: the PAR>60 FLAG comes from the grid (s.dpd at month m,
+-- which is the previous month-end for month m+1), but the CASH comes from
+-- coll_m, which reads the repayment ledger and is not gridded. The old version
+-- took both from `flags`, so when a PAR>60 loan was settled or closed, the grid
+-- ended the month before closure and its final collections vanished — exactly
+-- the recovery this measure exists to show. It ran 8-42% under Excel.
+--
+-- Pairing s.m with c.m = s.m + 1 month means a loan whose grid ends at M-1
+-- still reports the cash it paid in M, its closure month.
+par60_m AS (
+    SELECT c.m,
+        s.branch_id, s.lo_id, s.business_segment,
+        s.disb_year, s.cycle_no, s.prod_classification,
+        sum(c.coll) AS par60_collection
+    FROM state s
+    JOIN coll_m c
+      ON c.loan_id = s.loan_id
+     AND c.m = (s.m + interval '1 month')::date
+    WHERE s.dpd > 60
+      AND NOT (s.wo_month IS NOT NULL AND c.m >= s.wo_month)
+      AND c.m <= (SELECT m FROM last_m)
+    GROUP BY 1, 2, 3, 4, 5, 6, 7
 ),
 
 flags AS (
@@ -234,6 +282,33 @@ flags AS (
         (wo_month IS NOT NULL AND m >= wo_month)         AS is_wo,
         (wo_month IS NOT NULL AND m >  wo_month)         AS is_post_wo
     FROM state
+),
+
+-- Post-write-off recovery, taken STRAIGHT FROM THE COLLECTION LEDGER.
+--
+-- It deliberately does NOT go through `grid`/`flags`. The grid ends a loan's
+-- month series at the month BEFORE closure, and a write-off normally CLOSES the
+-- loan — so every recovery month fell outside the grid and was silently dropped.
+-- Measured 2026-08-07: rpt_trend_full ran 35-45% under Excel every month, while
+-- this ledger-based figure lands on it (Sep-25 within Rs 9, Mar-26 within
+-- Rs 5,389). Only loans are joined here, never the grid, so a closed loan still
+-- reports the cash it brings in.
+--
+-- Stock measures keep the grid truncation, which is correct for them: a loan
+-- closed mid-month is not on-book at month-end.
+wo_rec_m AS (
+    SELECT date_trunc('month', rd.collection_date_time)::date AS m,
+        l.branch_id, l.lo_id, l.business_segment,
+        l.disb_year, l.cycle_no, l.prod_classification,
+        sum(coalesce(rd.principal_collected, 0)
+          + coalesce(rd.interest_collected, 0))            AS wo_recovery
+    FROM public.repayment_detail_il rd
+    JOIN loans l ON l.loan_id = rd.loan_id
+    WHERE rd.status = 'A'
+      AND l.wo_dt IS NOT NULL
+      AND rd.collection_date_time::date > l.wo_dt
+      AND date_trunc('month', rd.collection_date_time)::date <= (SELECT m FROM last_m)
+    GROUP BY 1, 2, 3, 4, 5, 6, 7
 ),
 
 -- monthly disbursement (independent of the repayment ledger)
@@ -285,9 +360,33 @@ agg AS (
                                           AND coalesce(f.prev_dpd, 0) = 0)             AS reg_demand,
         sum(f.coll_capped)      FILTER (WHERE NOT f.is_wo
                                           AND coalesce(f.prev_dpd, 0) = 0)             AS reg_collection,
+        -- COUNT versions of the same cohort, for the incentive engine's CE%.
+        -- The policy's 0-bucket CE is a COUNT ratio (collection count / demand
+        -- count), not an amount ratio, so these sit beside the amount measures
+        -- rather than replacing them. Purely additive: no existing measure or
+        -- its filter changes, so every published figure stays byte-identical.
+        -- A loan counts as collected when the capped collection covers the
+        -- month's demand (0.005 tolerance for float noise).
+        count(*)                FILTER (WHERE NOT f.is_wo
+                                          AND coalesce(f.prev_dpd, 0) = 0
+                                          AND NOT f.is_death
+                                          AND f.due > 0)                               AS reg_demand_count,
+        count(*)                FILTER (WHERE NOT f.is_wo
+                                          AND coalesce(f.prev_dpd, 0) = 0
+                                          AND NOT f.is_death
+                                          AND f.due > 0
+                                          AND f.coll_capped >= f.due - 0.005)          AS reg_collection_count,
         -- collections this month from loans PAR>60 at previous month-end
         sum(f.coll)             FILTER (WHERE NOT f.is_wo
                                           AND coalesce(f.prev_dpd, 0) > 60)            AS par60_collection,
+        -- collections this month from loans in the 1-60 bucket at the previous
+        -- month-end. Feeds the incentive recovery bonus, which pays 2% on this
+        -- and 4% on the 60+ side, so it must be an AMOUNT — a count multiplied
+        -- by 2% would not be money. Mirrors par60_collection exactly: same
+        -- source, same NOT is_wo filter, same prev-month-end bucket basis, so
+        -- the two sides of the bonus are measured the same way.
+        sum(f.coll)             FILTER (WHERE NOT f.is_wo
+                                          AND coalesce(f.prev_dpd, 0) BETWEEN 1 AND 60) AS par1_60_collection,
         -- post-write-off recovery
         sum(f.coll)             FILTER (WHERE f.is_post_wo)                            AS wo_recovery,
         -- write-off PORTION of the flow measures (is_wo). "With W/O" = base + *_wo,
@@ -311,18 +410,21 @@ agg AS (
 
 , joined AS (
     SELECT
-        coalesce(a.m, d.m)                                   AS m,
-        coalesce(a.business_segment, d.business_segment)     AS business_segment,
-        coalesce(a.branch_id, d.branch_id)                   AS branch_id,
-        coalesce(a.lo_id, d.lo_id)                           AS lo_id,
-        coalesce(a.disb_year, d.disb_year)                   AS disb_year,
-        coalesce(a.cycle_no, d.cycle_no)                     AS cycle_no,
-        coalesce(a.prod_classification, d.prod_classification) AS prod_classification,
+        coalesce(a.m, d.m, r.m, p.m)                                   AS m,
+        coalesce(a.business_segment, d.business_segment, r.business_segment, p.business_segment)     AS business_segment,
+        coalesce(a.branch_id, d.branch_id, r.branch_id, p.branch_id)                   AS branch_id,
+        coalesce(a.lo_id, d.lo_id, r.lo_id, p.lo_id)                           AS lo_id,
+        coalesce(a.disb_year, d.disb_year, r.disb_year, p.disb_year)                   AS disb_year,
+        coalesce(a.cycle_no, d.cycle_no, r.cycle_no, p.cycle_no)                     AS cycle_no,
+        coalesce(a.prod_classification, d.prod_classification, r.prod_classification, p.prod_classification) AS prod_classification,
         a.loans_eom, a.pos_eom, a.par0_pos, a.par30_pos, a.par60_pos, a.par90_pos,
         a.wo_loans_eom, a.wo_pos_eom,
         a.demand, a.collection, a.collection_capped,
         a.slip_count, a.slip_pos, a.prev_regular_pos,
-        a.reg_demand, a.reg_collection, a.par60_collection, a.wo_recovery,
+        a.reg_demand, a.reg_collection,
+        a.reg_demand_count, a.reg_collection_count, a.par1_60_collection,
+        p.par60_collection,
+        r.wo_recovery,
         a.demand_wo, a.collection_capped_wo, a.slip_count_wo, a.slip_pos_wo,
         a.prev_regular_pos_wo, a.reg_demand_wo, a.reg_collection_wo,
         d.disb_count, d.disb_amount
@@ -334,6 +436,21 @@ agg AS (
        AND d.disb_year IS NOT DISTINCT FROM a.disb_year
        AND d.cycle_no  IS NOT DISTINCT FROM a.cycle_no
        AND d.prod_classification IS NOT DISTINCT FROM a.prod_classification
+    FULL OUTER JOIN wo_rec_m r
+        ON r.m = coalesce(a.m, d.m) AND r.branch_id = coalesce(a.branch_id, d.branch_id)
+       AND r.lo_id IS NOT DISTINCT FROM coalesce(a.lo_id, d.lo_id)
+       AND r.business_segment = coalesce(a.business_segment, d.business_segment)
+       AND r.disb_year IS NOT DISTINCT FROM coalesce(a.disb_year, d.disb_year)
+       AND r.cycle_no  IS NOT DISTINCT FROM coalesce(a.cycle_no, d.cycle_no)
+       AND r.prod_classification IS NOT DISTINCT FROM coalesce(a.prod_classification, d.prod_classification)
+    FULL OUTER JOIN par60_m p
+        ON p.m = coalesce(a.m, d.m, r.m)
+       AND p.branch_id = coalesce(a.branch_id, d.branch_id, r.branch_id)
+       AND p.lo_id IS NOT DISTINCT FROM coalesce(a.lo_id, d.lo_id, r.lo_id)
+       AND p.business_segment = coalesce(a.business_segment, d.business_segment, r.business_segment)
+       AND p.disb_year IS NOT DISTINCT FROM coalesce(a.disb_year, d.disb_year, r.disb_year)
+       AND p.cycle_no  IS NOT DISTINCT FROM coalesce(a.cycle_no, d.cycle_no, r.cycle_no)
+       AND p.prod_classification IS NOT DISTINCT FROM coalesce(a.prod_classification, d.prod_classification, r.prod_classification)
 )
 
 SELECT
@@ -370,7 +487,10 @@ SELECT
     round(coalesce(a.prev_regular_pos, 0)::numeric, 2)   AS prev_regular_pos,
     round(coalesce(a.reg_demand, 0)::numeric, 2)         AS reg_demand,
     round(coalesce(a.reg_collection, 0)::numeric, 2)     AS reg_collection,
+    coalesce(a.reg_demand_count, 0)                      AS reg_demand_count,
+    coalesce(a.reg_collection_count, 0)                  AS reg_collection_count,
     round(coalesce(a.par60_collection, 0)::numeric, 2)   AS par60_collection,
+    round(coalesce(a.par1_60_collection, 0)::numeric, 2) AS par1_60_collection,
     round(coalesce(a.wo_recovery, 0)::numeric, 2)        AS wo_recovery,
     round(coalesce(a.demand_wo, 0)::numeric, 2)              AS demand_wo,
     round(coalesce(a.collection_capped_wo, 0)::numeric, 2)   AS collection_capped_wo,

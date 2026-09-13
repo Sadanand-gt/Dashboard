@@ -14,11 +14,17 @@ const PAGE_TITLES: Record<string, string> = {
   '/dashboard/cashless':      'Cashless Collection',
   '/dashboard/disbursement':  'Disbursement',
   '/dashboard/pos-par':       'POS & Portfolio at Risk',
-  '/dashboard/delinquencies': 'Delinquencies',
+  '/dashboard/par60-collection': 'PAR 60 Collection',
   '/dashboard/bucket-movement':'Bucket Movement',
   '/dashboard/case-movement': 'Case Movement',
+  '/dashboard/origination-funnel': 'Origination Funnel',
   '/dashboard/writeoff':      'Write-Off Portfolio',
   '/dashboard/trend':         'Monthly Trend',
+  '/dashboard/vintage':       'Vintage Curve',
+  '/dashboard/aml':           'AML Risk Category',
+  '/dashboard/ots':           'One-Time Settlement',
+  '/dashboard/portfolio-cuts':'Portfolio Cuts',
+  '/dashboard/credit-bureau': 'Credit Bureau & Sourcing',
   '/dashboard/admin/users':   'User Management',
 }
 

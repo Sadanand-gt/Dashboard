@@ -1,0 +1,186 @@
+<!doctype html>
+<html>
+<head>
+  <meta charset="utf-8">
+  <script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet>
+  <link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;700&display=swap">
+  <style>
+    body { margin: 0; font-family: 'Inter', system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+    a { color: #1565C0; } a:hover { color: #0D47A1; }
+    .mono { font-family: 'JetBrains Mono', ui-monospace, monospace; }
+    .cur td { border-bottom: 1px solid rgba(0,0,0,0.05); font-size: 0.8125rem; padding: 9px 14px; color: #1E293B; }
+    .cur th { background: #EFF6FF; color: #1E40AF; font-weight: 700; font-size: 0.7rem; text-transform: uppercase;
+              letter-spacing: 0.06em; border-bottom: 2px solid #BFDBFE; padding: 9px 14px; white-space: nowrap; }
+  </style>
+</helmet>
+
+<div style="width: 1280px; background: #F4F6FA; padding: 16px; box-sizing: border-box; color: #1E293B">
+
+  <div style="display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px">
+    <div style="font-size: 0.72rem; font-weight: 800; color: #64748B; text-transform: uppercase; letter-spacing: 0.1em">Baseline — today's build</div>
+    <div style="font-size: 0.72rem; color: #94A3B8">for honest comparison</div>
+  </div>
+
+  <!-- Sticky analysis-parameter bar -->
+  <div style="display: flex; align-items: center; gap: 16px; flex-wrap: wrap; background: #FFFFFF; border-radius: 16px;
+              padding: 7px 16px; border: 1px solid rgba(0,0,0,0.07); box-shadow: 0 2px 8px -4px rgba(15,23,42,0.28); margin-bottom: 8px">
+    <div style="font-size: 0.95rem; font-weight: 700; color: #1E293B">Delinquencies</div>
+    <div style="width: 1px; height: 22px; background: rgba(0,0,0,0.09)"></div>
+    <div>
+      <div style="font-size: 0.6rem; color: #64748B; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 2px">AP #1</div>
+      <div style="border: 1px solid rgba(0,0,0,0.18); border-radius: 6px; padding: 3px 10px; font-size: 0.75rem; background: #FFFFFF">Branch</div>
+    </div>
+    <div>
+      <div style="font-size: 0.6rem; color: #64748B; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 2px">AP #2</div>
+      <div style="border: 1px solid rgba(0,0,0,0.18); border-radius: 6px; padding: 3px 10px; font-size: 0.75rem; background: #FFFFFF">Business Segment</div>
+    </div>
+    <div style="width: 1px; height: 22px; background: rgba(0,0,0,0.09)"></div>
+    <div>
+      <div style="font-size: 0.6rem; color: #64748B; font-weight: 700; text-transform: uppercase; letter-spacing: 0.07em; margin-bottom: 2px">Portfolio</div>
+      <div style="display: flex; height: 26px; border-radius: 6px; overflow: hidden; border: 1px solid rgba(0,0,0,0.18)">
+        <div style="padding: 0 10px; display: flex; align-items: center; font-size: 0.7rem; color: #64748B">With W/O</div>
+        <div style="padding: 0 10px; display: flex; align-items: center; font-size: 0.7rem; background: rgba(21,101,192,0.12); color: #1565C0; font-weight: 600">Excl W/O</div>
+      </div>
+    </div>
+    <div style="flex-grow: 1"></div>
+    <div style="border: 1px solid rgba(0,0,0,0.18); border-radius: 6px; padding: 4px 12px; font-size: 0.7rem; font-weight: 600; color: #1565C0">Export CSV</div>
+    <div style="text-align: right">
+      <div style="font-size: 0.58rem; color: #94A3B8; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em">As of</div>
+      <div style="font-size: 0.8rem; font-weight: 700; color: #1E293B">21 Aug 2026</div>
+    </div>
+  </div>
+
+  <!-- KPI strip -->
+  <div style="display: grid; grid-template-columns: repeat(5, minmax(0, 1fr)); gap: 12px; margin-bottom: 8px">
+    <sc-for list="{{kpis}}" as="k" hint-placeholder-count="5">
+      <div style="background: #FFFFFF; padding: 12px; border-radius: 16px; border: 1px solid rgba(15,23,42,0.09);
+                  border-left: 3px solid {{k.accent}}; box-shadow: 0 1px 4px rgba(0,0,0,0.06)">
+        <div style="font-size: 0.6rem; font-weight: 700; color: #64748B; text-transform: uppercase; letter-spacing: 0.07em">{{k.label}}</div>
+        <div style="font-size: 1.2rem; font-weight: 800; color: #1E293B; margin-top: 2px">{{k.value}}</div>
+      </div>
+    </sc-for>
+  </div>
+
+  <!-- Collapsed chart panel -->
+  <div style="background: #FFFFFF; border: 1px solid rgba(0,0,0,0.07); border-radius: 16px; padding: 16px;
+              box-shadow: 0 1px 4px rgba(0,0,0,0.06); margin-bottom: 8px; display: flex; align-items: center; gap: 8px">
+    <div style="font-size: 0.82rem; font-weight: 700; color: #1E293B">PAR 30+ by Branch</div>
+    <div style="flex-grow: 1"></div>
+    <div style="border: 1px solid rgba(0,0,0,0.18); border-radius: 6px; padding: 3px 10px; font-size: 0.68rem; color: #1565C0; font-weight: 600">Show chart</div>
+  </div>
+
+  <!-- Table -->
+  <div style="background: #FFFFFF; border: 1px solid rgba(0,0,0,0.07); border-radius: 16px; overflow: hidden; box-shadow: 0 1px 4px rgba(0,0,0,0.06)">
+    <div style="padding: 10px 16px; border-bottom: 1px solid rgba(0,0,0,0.06); display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap">
+      <div style="font-size: 0.82rem; font-weight: 700; color: #1E293B">Delinquencies — Branch × Business Segment</div>
+      <div style="display: flex; align-items: center; gap: 6px; font-size: 0.62rem; color: #94A3B8">
+        <span>vs Business Segment median:</span>
+        <span style="width: 14px; height: 10px; border-radius: 2px; background: rgba(22,163,74,0.12)"></span>
+        <span>better</span>
+        <span style="width: 14px; height: 10px; border-radius: 2px; background: rgba(217,119,6,0.13)"></span>
+        <span style="width: 14px; height: 10px; border-radius: 2px; background: rgba(220,38,38,0.16)"></span>
+        <span>worse</span>
+      </div>
+    </div>
+    <table class="cur" style="width: 100%; border-collapse: collapse">
+      <thead>
+        <tr>
+          <th style="text-align: left">Branch</th>
+          <th style="text-align: left">Business Segment</th>
+          <th style="text-align: right">POS</th>
+          <th style="text-align: right"># Loans</th>
+          <th style="text-align: right">PAR 0+</th>
+          <th style="text-align: right">PAR 30+</th>
+          <th style="text-align: right">PAR 60+</th>
+          <th style="text-align: right">PAR 90+</th>
+        </tr>
+      </thead>
+      <tbody>
+        <sc-for list="{{rows}}" as="r" hint-placeholder-count="9">
+          <tr style="background: {{r.zebra}}">
+            <td style="font-weight: 600; white-space: nowrap">{{r.branch}}</td>
+            <td style="color: #475569">{{r.seg}}</td>
+            <td class="mono" style="text-align: right; font-size: 0.74rem">{{r.pos}}</td>
+            <td class="mono" style="text-align: right; font-size: 0.74rem">{{r.loans}}</td>
+            <td class="mono" style="text-align: right; font-size: 0.74rem; background: {{r.h0}}; color: {{r.i0}}; font-weight: {{r.w0}}">{{r.par0}}</td>
+            <td class="mono" style="text-align: right; font-size: 0.74rem; background: {{r.h30}}; color: {{r.i30}}; font-weight: {{r.w30}}">{{r.par30}}</td>
+            <td class="mono" style="text-align: right; font-size: 0.74rem; background: {{r.h60}}; color: {{r.i60}}; font-weight: {{r.w60}}">{{r.par60}}</td>
+            <td class="mono" style="text-align: right; font-size: 0.74rem; background: {{r.h90}}; color: {{r.i90}}; font-weight: {{r.w90}}">{{r.par90}}</td>
+          </tr>
+        </sc-for>
+        <tr style="background: #F8FAFF">
+          <td style="font-weight: 800; border-top: 2px solid rgba(0,0,0,0.15)">Grand Total</td>
+          <td style="border-top: 2px solid rgba(0,0,0,0.15)"></td>
+          <td class="mono" style="text-align: right; font-weight: 800; border-top: 2px solid rgba(0,0,0,0.15); font-size: 0.74rem">₹418.50 Cr</td>
+          <td class="mono" style="text-align: right; font-weight: 800; border-top: 2px solid rgba(0,0,0,0.15); font-size: 0.74rem">123,345</td>
+          <td class="mono" style="text-align: right; font-weight: 800; border-top: 2px solid rgba(0,0,0,0.15); font-size: 0.74rem">18.24%</td>
+          <td class="mono" style="text-align: right; font-weight: 800; border-top: 2px solid rgba(0,0,0,0.15); font-size: 0.74rem">17.25%</td>
+          <td class="mono" style="text-align: right; font-weight: 800; border-top: 2px solid rgba(0,0,0,0.15); font-size: 0.74rem">17.08%</td>
+          <td class="mono" style="text-align: right; font-weight: 800; border-top: 2px solid rgba(0,0,0,0.15); font-size: 0.74rem">16.92%</td>
+        </tr>
+      </tbody>
+    </table>
+  </div>
+
+  <div style="margin-top: 14px; display: flex; flex-direction: column; gap: 5px">
+    <div style="font-size: 0.72rem; font-weight: 700; color: #64748B; text-transform: uppercase; letter-spacing: 0.08em">What is weak here</div>
+    <div style="font-size: 0.8rem; color: #64748B; line-height: 1.6; max-width: 900px">Five KPI tiles carry no comparison, so none of them tells you whether the number is good. The chart bar occupies a full row to say nothing. Every column is the same visual weight, so magnitude (POS) and risk (PAR) compete equally for attention. Nothing marks a row as needing action — you must read all four PAR columns on every branch to find the exceptions.</div>
+  </div>
+
+</div>
+</x-dc>
+
+<script data-dc-script data-props='{}'>
+class Component extends DCLogic {
+  renderVals() {
+    // Real figures, Excl. W/O, from rpt_aum_status. Benchmark = JLG segment
+    // median PAR 30+ (13.66%), which is what the two-deep grouping uses.
+    const M = 13.66;
+    const heat = (v) => {
+      const r = v / M;
+      if (r >= 1.50) return ['rgba(220,38,38,0.18)', '#7F1D1D', '700'];
+      if (r >= 1.15) return ['rgba(217,119,6,0.14)', '#92400E', '600'];
+      if (r >= 0.85) return ['transparent', '#1E293B', '400'];
+      if (r >= 0.50) return ['rgba(22,163,74,0.10)', '#14532D', '500'];
+      return ['rgba(22,163,74,0.18)', '#14532D', '700'];
+    };
+    const src = [
+      ['SURENDRA_NAGAR', '₹9.84 Cr', '2,534', 11.79, 10.84, 10.74, 10.67],
+      ['CS_AZAD_NAGAR',  '₹8.45 Cr', '2,069',  6.43,  5.33,  5.26,  5.24],
+      ['DAHOD_1',        '₹8.09 Cr', '1,784',  4.08,  3.98,  3.96,  3.96],
+      ['BANSWARA',       '₹7.19 Cr', '2,122', 14.46, 13.66, 13.52, 13.40],
+      ['PETLAWAD',       '₹6.63 Cr', '1,588',  6.55,  6.32,  6.30,  6.30],
+      ['KUKSHI',         '₹6.25 Cr', '1,888', 16.86, 15.90, 15.83, 15.70],
+      ['ALIRAJPUR',      '₹6.02 Cr', '1,630', 13.72, 12.68, 12.48, 12.35],
+      ['JHABUA',         '₹5.83 Cr', '1,748', 16.06, 15.58, 15.42, 15.42],
+      ['RAJGARH',        '₹5.60 Cr', '1,547', 15.89, 15.49, 15.34, 15.26]
+    ];
+    return {
+      kpis: [
+        { label: 'Total POS',  value: '₹418.50 Cr', accent: '#1565C0' },
+        { label: '# Loans',    value: '123,345',    accent: '#1565C0' },
+        { label: 'PAR 0+',     value: '18.24%',     accent: '#D97706' },
+        { label: 'PAR 30+',    value: '17.25%',     accent: '#DC2626' },
+        { label: 'PAR 90+',    value: '16.92%',     accent: '#DC2626' }
+      ],
+      rows: src.map((s, i) => {
+        const [h0, i0, w0] = heat(s[3]), [h30, i30, w30] = heat(s[4]);
+        const [h60, i60, w60] = heat(s[5]), [h90, i90, w90] = heat(s[6]);
+        return {
+          branch: s[0], seg: 'JLG', pos: s[1], loans: s[2],
+          par0: s[3].toFixed(2) + '%', par30: s[4].toFixed(2) + '%',
+          par60: s[5].toFixed(2) + '%', par90: s[6].toFixed(2) + '%',
+          h0, i0, w0, h30, i30, w30, h60, i60, w60, h90, i90, w90,
+          zebra: i % 2 ? '#FCFDFF' : '#FFFFFF'
+        };
+      })
+    };
+  }
+}
+</script>
+</body>
+</html>

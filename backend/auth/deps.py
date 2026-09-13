@@ -38,6 +38,13 @@ require_manager_or_above = require_role("admin", "manager")
 require_officer_or_above = require_role("admin", "manager", "officer")
 
 
+def require_export(user: dict = Depends(get_current_user)) -> dict:
+    """Allow download endpoints only when an MIS admin granted CSV export."""
+    if not user.get("can_export"):
+        raise HTTPException(status_code=403, detail="CSV export is not enabled for your account")
+    return user
+
+
 async def report_gate(request: Request, user: dict = Depends(get_current_user)) -> dict:
     """Apply report grants and install the Sathi-derived row scope."""
     from core.request_ctx import current_user

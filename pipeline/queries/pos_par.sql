@@ -213,6 +213,25 @@ jlg_pos_eom AS (
     GROUP BY rd.loan_id
 ),
 
+-- Disbursed-so-far at eom_date for STAGED (tranched) IL loans — see the matching
+-- block in aum_status.sql. Basing month-end POS on total_loan_amount reported
+-- undisbursed sanction as outstanding (Rs 2,57,829 over 4 loans on 2026-07-31).
+-- LIVE POS is untouched: it reads principal_outstanding, which already nets this off.
+il_disb_eom AS MATERIALIZED (
+    SELECT DISTINCT ON (a.loan_id)
+           a.loan_id, a.principal_total AS disbursed
+    FROM public.loan_account_il_audit a
+    CROSS JOIN date_anchors da
+    WHERE a.principal_total IS NOT NULL
+      AND coalesce(a.modified_on, a.created_on) IS NOT NULL
+      AND coalesce(a.modified_on, a.created_on)::date <= da.eom_date
+      AND a.loan_id IN (
+          SELECT loan_id FROM public.loan_account_il_audit
+          WHERE principal_total IS NOT NULL AND total_loan_amount IS NOT NULL
+          GROUP BY loan_id HAVING bool_or(principal_total <> total_loan_amount))
+    ORDER BY a.loan_id, coalesce(a.modified_on, a.created_on) DESC
+),
+
 -- ─────────────────────────────────────────────────────────────────────────────
 -- 7a. IL LOAN UNIVERSE — EOM
 -- ─────────────────────────────────────────────────────────────────────────────
@@ -225,7 +244,8 @@ il_eom AS (
         la.branch_id,
         la.loan_officer          AS lo_id,
         -- POS AS AT eom_date, not today's balance — see il_pos_eom.
-        greatest(coalesce(la.total_loan_amount, 0) - coalesce(pe.prin_coll, 0), 0) AS pos,
+        greatest(coalesce(de.disbursed, la.total_loan_amount, 0)
+                 - coalesce(pe.prin_coll, 0), 0) AS pos,
         coalesce(dpd.dpd, 0)     AS dpd,
         CASE WHEN la.status = 'W' OR (w.loan_id IS NOT NULL
                   AND (w.wo_date IS NULL OR la.disbursement_date::date <= w.wo_date))
@@ -235,6 +255,7 @@ il_eom AS (
     LEFT JOIN wo_master w    ON w.loan_id   = la.loan_id
     LEFT JOIN il_dpd_eom dpd ON dpd.loan_id = la.loan_id
     LEFT JOIN il_pos_eom pe  ON pe.loan_id  = la.loan_id
+    LEFT JOIN il_disb_eom de ON de.loan_id = la.loan_id
     -- ::date on BOTH sides of every anchor compare. IL disbursement/closure dates are
     -- TIMESTAMPs with a real time-of-day (4,809 of 7,743 rows); the anchors are DATEs.
     -- Uncast, a loan disbursed at 17:14 on the anchor day is dropped, and one closed

@@ -97,11 +97,79 @@ def _ce(collection: float, demand: float) -> float:
 
 
 def _metrics(pos, loans, od, sanc, dem, col) -> dict:
+    """od_to_disb = total_arrear / sanctioned_amount. It is OD against the amount
+    LENT, not against POS — the UI column is "OD-to-Disb %" for that reason. It
+    previously read "OD-to-POS %", which named a different ratio than the one shown
+    (`od_pct` in the KPI payload is the real OD/POS, used by the OD Amount card).
+
+    IT CAN EXCEED 100%, AND THAT IS CORRECT — do not "fix" it. total_arrear is
+    principal_arrear + interest_arrear, the full amount owed, while the denominator
+    is the amount lent. A loan that has repaid nothing for years therefore owes more
+    than was disbursed. JLG 360+ reads 101.79% on 2026-08-19; the worst single loan
+    is 10136445 — disbursed 2021-03-22, sanctioned 28,707, the FULL 28,707 principal
+    still in arrear plus 7,615 interest = 36,322, i.e. 126.53%. Capping it would
+    hide exactly the loans that matter most.
+
+    This was investigated on 2026-08-19 after the 101.79% was flagged. The VALUE was
+    always right; only the column heading was wrong (it read "OD-to-POS %"). Dropping
+    interest to force the ratio under 100% was tried and reverted — it understates
+    what the borrower actually owes.
+
+    FOR REFERENCE, the principal-only figures measured that day, in case the
+    distinction is ever needed: principal_arrear <= pos <= sanctioned holds without
+    exception (0 breaches over 105,407 JLG + 3,768 IL live loans), so a
+    principal-only OD ratio is structurally capped at 100%. `od_pct` in the KPI
+    payload is OD/POS on this same principal+interest basis.
+    """
     return {
         "pos": pos, "loans": int(loans), "od_amt": od,
         "ce": _ce(col, dem),
         "od_to_disb": round(od / sanc * 100, 2) if sanc else 0.0,
     }
+
+
+def _od_split(f: dict, od_buckets: list) -> dict:
+    """Break "Loans in OD" into WHY each loan is overdue.
+
+        hdpn  Had Demand, Paid Nothing   — owed this month and paid nothing
+        pp    Partly Paid                — paid something this month, still overdue
+        aod   Ageing OD                  — overdue with NO current-month demand,
+                                           i.e. carrying older arrears only
+
+    Mutually exclusive, and they sum to loans_in_od.
+
+    Needs loan grain on both sides: rpt_aum_status is aggregated and has no
+    loan_id, so this reads rpt_aum_loans (which reconciles to it exactly) and
+    left-joins rpt_collection_loans. That table only holds loans with demand OR
+    receipts, so an OD loan missing from it has neither — which is precisely the
+    'aod' case, and why the join must be a LEFT join.
+    """
+    empty = {"od_hdpn": 0, "od_pp": 0, "od_aod": 0}
+    try:
+        al = read_report("rpt_aum_loans")
+        if al.empty or "dpd_bucket" not in al.columns:
+            return empty
+        if "open_now" in al.columns:
+            al = al[al["open_now"].fillna(True).astype(bool)]
+        al = _apply_filters(al, f)
+        od = al[al["dpd_bucket"].isin(od_buckets)]
+        if od.empty:
+            return empty
+        cl = read_report("rpt_collection_loans")
+        if cl.empty or "loan_id" not in cl.columns:
+            return {**empty, "od_aod": int(len(od))}
+        m = od[["loan_id"]].merge(
+            cl[["loan_id", "mtd_demand", "mtd_collection"]].drop_duplicates("loan_id"),
+            on="loan_id", how="left")
+        dem = m["mtd_demand"].fillna(0)
+        coll = m["mtd_collection"].fillna(0)
+        pp = coll > 0
+        hdpn = (dem > 0) & ~pp
+        return {"od_hdpn": int(hdpn.sum()), "od_pp": int(pp.sum()),
+                "od_aod": int((~pp & ~hdpn).sum())}
+    except Exception:
+        # a KPI card must never take the page down
+        return empty
 
 
 def _bucket_sort_key(v: str):
@@ -216,6 +284,7 @@ def ageing_kpis(filters: dict = Depends(_filter_params), user: dict = Depends(ge
     sanc = float(aum["total_sanctioned"].sum()) if "total_sanctioned" in aum.columns else 0.0
     # Loans in OD = loans in an overdue DPD bucket (1-30 … 360+; excludes Regular & Write-Off)
     od_buckets = ["1 - 30", "31 - 60", "61 - 90", "91 - 180", "181 - 360", "360 +"]
+    od_split = _od_split(filters, od_buckets)
     loans_in_od = int(aum[aum["dpd_bucket"].isin(od_buckets)]["loan_count"].sum()) if "dpd_bucket" in aum.columns else 0
     return {
         "total_pos": pos,
@@ -223,5 +292,8 @@ def ageing_kpis(filters: dict = Depends(_filter_params), user: dict = Depends(ge
         "od_amt": od,
         "od_pct": round(od / pos * 100, 2) if pos else 0,
         "loans_in_od": loans_in_od,
+        # Why each OD loan is in OD, so the count is actionable rather than a
+        # single lump. The three are mutually exclusive and sum to loans_in_od.
+        **od_split,
         "od_to_disb": round(od / sanc * 100, 2) if sanc else 0,
     }

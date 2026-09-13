@@ -14,6 +14,7 @@ import ToggleButtonGroup from '@mui/material/ToggleButtonGroup'
 import Tooltip from '@mui/material/Tooltip'
 import { api } from '../api/client'
 import { KpiCard } from '../components/KpiCard'
+import { ExportCsvButton } from '../components/ExportCsvButton'
 import { useSlicerParams } from '../store/filterStore'
 import { DimSelect, fmtInr, fmtNum, inrUnit, fmtUnit, bucketRank } from './collectionShared'
 import { TrendSection } from '../components/TrendSection'
@@ -44,7 +45,19 @@ const AP2_OPTIONS = [{ value: 'none', label: '— None —' }, ...AP_DIMS]
 interface SlipCell { count: number; pos: number }
 interface SlipRow { name: string; name2?: string | null; cells: SlipCell[]; total_count: number; total_pos: number; is_total?: boolean }
 interface SlipResp { freqs: string[]; rows: SlipRow[] }
-interface SlipKpis { total_count: number; total_pos: number; first_time: number; repeat: number }
+// Loan-wise export. Ships BOTH matrix-basis rows and the loans since written
+// off, with the flag as a readable column, so one file reconciles to the card.
+const OD_SLIP_EXPORT_COLS: [string, string][] = [
+  ['loan_id', 'Loan ID'], ['business_segment', 'Business Segment'],
+  ['loan_status', 'Loan Status'], ['in_od_matrix', 'OD Matrix Basis'],
+  ['prev_slippage_count', 'Previous Slippages (12M)'], ['pos', 'POS'],
+  ['zone_name', 'Zone'], ['cluster_name', 'Cluster'], ['region_name', 'Region'],
+  ['area_name', 'Unit'], ['branch_name', 'Branch'], ['branch_id', 'Branch ID'],
+  ['lo_id', 'Loan Officer ID'], ['state_id', 'State'], ['district_id', 'District'],
+]
+
+interface SlipKpis { total_count: number; total_pos: number; first_time: number; repeat: number
+  all_count: number; excluded_writeoff: number }
 
 export function OdSlippage() {
   const [ap1, setAp1] = useState('business_segment')   // Excel default AP#1 = BUSINESS SEGMENT
@@ -71,6 +84,12 @@ export function OdSlippage() {
     queryKey: ['aum-refresh'],
     queryFn: () => api.get('/api/aum/refresh').then((r) => r.data),
   })
+
+  // Loan rows fetched on click, not held in the page — see ExportCsvButton.
+  // Uses `params` (the slicer + portfolio set the cards use), so the file always
+  // matches the figures on screen.
+  const fetchSlipLoans = async () =>
+    (await api.get('/api/od-slippage/loans', { params })).data.rows as Record<string, any>[]
 
   const freqs = resp?.freqs ?? []
   const rows = resp?.rows ?? []
@@ -112,6 +131,8 @@ export function OdSlippage() {
           </ToggleButtonGroup>
         </Box>
         <Box sx={{ flex: 1, minWidth: 8 }} />
+        <ExportCsvButton rows={[]} columns={OD_SLIP_EXPORT_COLS} fetchRows={fetchSlipLoans}
+          filename="od_slippage_loans" />
         <Tooltip title="Freshly slipped into OD (Regular last month-end → OD now), as of T-1" placement="left">
           <Box sx={{ textAlign: 'right', flexShrink: 0 }}>
             <Box sx={{ fontSize: '0.58rem', color: '#94A3B8', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.06em' }}>As of</Box>
@@ -122,7 +143,23 @@ export function OdSlippage() {
 
       {/* KPI cards */}
       <Box sx={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: 1.5, alignItems: 'stretch' }}>
-        <KpiCard label="OD Slippage" value={kpis ? fmtNum(kpis.total_count) : '—'} sub="loans freshly slipped" variant="red" loading={kpiLoading} />
+        {/* Total reconciles to MTD FTOD on the collection report. The listed
+            rows below exclude loans since written off — the OD Status matrix
+            and the Excel sheet both drop them — so the split is shown here
+            rather than leaving the page total looking short. */}
+        {/* Total reconciles to MTD FTOD on the collection report. The rows
+            listed below exclude loans since written off — the OD Status matrix
+            and the Excel sheet both drop them — so the split rides on this
+            card's sub-line rather than taking a card of its own. */}
+        {/* The write-off split belongs to the With W/O view only. In Excl. W/O
+            those loans are filtered out upstream, so the count is 0 by
+            construction and "0 written off" reads as a finding rather than a
+            tautology. Shown only when there is something to show. */}
+        <KpiCard label="OD Slippage" value={kpis ? fmtNum(kpis.all_count) : '—'}
+          sub={kpis && kpis.excluded_writeoff > 0
+                 ? `${fmtNum(kpis.total_count)} listed · ${fmtNum(kpis.excluded_writeoff)} written off`
+                 : ''}
+          variant="red" loading={kpiLoading} />
         <KpiCard label="Slippage POS" value={kpis ? fmtInr(kpis.total_pos) : '—'} variant="default" loading={kpiLoading} />
         <KpiCard label="First-time" value={kpis ? fmtNum(kpis.first_time) : '—'} sub="0 previous slippages" variant="amber" loading={kpiLoading} />
         <KpiCard label="Repeat" value={kpis ? fmtNum(kpis.repeat) : '—'} sub="slipped before (12M)" variant="red" loading={kpiLoading} />

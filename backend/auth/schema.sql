@@ -9,11 +9,16 @@ CREATE TABLE IF NOT EXISTS public.mis_users (
     full_name   VARCHAR(300) NOT NULL,
     role        VARCHAR(30) NOT NULL DEFAULT 'officer'
                 CHECK (role IN ('admin','manager','officer','branch_user')),
+    can_export  BOOLEAN NOT NULL DEFAULT FALSE,
     is_active   BOOLEAN NOT NULL DEFAULT TRUE,
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
     last_login  TIMESTAMPTZ
 );
+
+-- Idempotent migration for installations created before CSV export permissions.
+ALTER TABLE public.mis_users
+    ADD COLUMN IF NOT EXISTS can_export BOOLEAN NOT NULL DEFAULT FALSE;
 
 CREATE UNIQUE INDEX IF NOT EXISTS ux_mis_users_username_lower
     ON public.mis_users (lower(username));

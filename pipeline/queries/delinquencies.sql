@@ -236,6 +236,10 @@ il_loans AS (
         CASE
             WHEN upper(trim(la.product_id::text)) LIKE '%SUGAM%'
               OR upper(trim(la.product_id::text)) LIKE '%UDYOGINI%'
+              -- %SECURED% belongs with LAP. Omitting it put SECURED_TOP_UP loans
+              -- in IEL, so this file disagreed with aum_status.sql and Excel
+              -- (LAP 88 vs 91). Verified 2026-08-08: 10038007, 10039190, 10040094.
+              OR upper(trim(la.product_id::text)) LIKE '%SECURED%'
             THEN 'LAP'
             ELSE 'IEL'
         END                                    AS loan_source,
@@ -268,7 +272,14 @@ il_loans AS (
     LEFT JOIN il_coll_this_month cm  ON cm.loan_id = la.loan_id
     LEFT JOIN il_demand_yesterday dy ON dy.loan_id = la.loan_id
     LEFT JOIN il_coll_yesterday cy   ON cy.loan_id = la.loan_id
+    -- Same live-book universe as aum_status.sql / aum_live.sql. Loans keep
+    -- status 'A'/'I' after closing, so without the closure guard this report
+    -- carried already-closed loans and read 3 above Current Outstanding.
     WHERE la.status IN ('A', 'D', 'I', 'W')
+      AND la.loan_id >= 10000000                 -- drop junk/test ids
+      AND (la.closure_date IS NULL
+           OR la.closure_date::date > current_date - 1
+           OR la.status = 'W')
 ),
 
 -- =========================================================
@@ -306,6 +317,10 @@ jlg_loans AS (
     WHERE la.status IN ('A', 'D', 'I', 'W')
       AND la.loan_id >= 10000000                 -- drop junk/test ids (e.g. 1111111)
       AND (la.status != 'W' OR la.prin_os > 0)
+      -- Closure guard, as in aum_status.sql — see the IL block above.
+      AND (la.closure_date IS NULL
+           OR la.closure_date::date > current_date - 1
+           OR la.status = 'W')
       AND NOT EXISTS (
           SELECT 1 FROM public.loan_account_il il
           WHERE il.loan_id           = la.loan_id

@@ -375,6 +375,33 @@ jlg_pos_eom AS (
     GROUP BY loan_id
 ),
 
+-- Disbursed-so-far at the prev month-end, for STAGED (tranched) IL loans.
+-- prev_pos was based on total_loan_amount = the SANCTION, so undisbursed sanction
+-- was reported as outstanding. On 2026-07-31 four IL loans were part-disbursed and
+-- that overstated month-end POS by Rs 2,57,829 (Rs 0.0258 Cr) — exactly the gap
+-- between OD Status and the trend engine, which has always used disbursed-so-far.
+-- Live POS is unaffected: it reads la.principal_outstanding, the core system's own
+-- balance, which already nets off the undisbursed portion.
+-- Same source and as-of rule as trend_full_il.sql's disb_asof, so the two engines
+-- agree by construction. The inner subquery narrows the audit scan to staged loans
+-- only (principal_total <> total_loan_amount at some point); single-tranche loans
+-- never enter, so this is a no-op for the rest of the book.
+-- JLG has no staging (home_loan_account disburses in one shot) and measured a zero
+-- gap, so jlg prev_pos is deliberately left on total_loan_amount.
+il_disb_eom AS MATERIALIZED (
+    SELECT DISTINCT ON (a.loan_id)
+           a.loan_id, a.principal_total AS disbursed
+    FROM public.loan_account_il_audit a
+    WHERE a.principal_total IS NOT NULL
+      AND coalesce(a.modified_on, a.created_on) IS NOT NULL
+      AND coalesce(a.modified_on, a.created_on)::date < (SELECT curr_month_start FROM ref)
+      AND a.loan_id IN (
+          SELECT loan_id FROM public.loan_account_il_audit
+          WHERE principal_total IS NOT NULL AND total_loan_amount IS NOT NULL
+          GROUP BY loan_id HAVING bool_or(principal_total <> total_loan_amount))
+    ORDER BY a.loan_id, coalesce(a.modified_on, a.created_on) DESC
+),
+
 il_loans AS (
     SELECT
         'IL'                                                    AS loan_source,
@@ -390,7 +417,7 @@ il_loans AS (
         la.loan_officer                                         AS lo_id,
         la.product_id::text                                     AS product_id,
         la.principal_outstanding                                AS pos,
-        greatest(coalesce(la.total_loan_amount,0)
+        greatest(coalesce(de.disbursed, la.total_loan_amount, 0)
                  - coalesce(pe.prin_coll,0), 0)                 AS prev_pos,
         la.total_loan_amount                                    AS sanctioned_amount,
         la.disbursement_date,
@@ -405,6 +432,11 @@ il_loans AS (
              ELSE coalesce(d.dpd, 0) END                        AS eom_dpd,
         CASE WHEN la.status IN ('D','I') AND coalesce(la.dpd,0) = 0 THEN 0
              ELSE coalesce(p.pre_dpd, 0) END                    AS pre_dpd,
+        -- OD amount = PRINCIPAL + INTEREST arrear. This is the full amount the
+        -- borrower owes and is the intended measure — do not reduce it to
+        -- principal. It makes OD-to-Disb exceed 100% on deeply delinquent loans
+        -- (JLG 360+ = 101.79%), which is correct: a loan that has repaid nothing
+        -- for years owes more than was lent. See _metrics in backend/api/ageing.py.
         coalesce(la.principal_arrear, 0) + coalesce(la.interest_arrear, 0) AS total_arrear,
         CASE WHEN la.status = 'W' OR (w.loan_id IS NOT NULL
                   AND (w.wo_date IS NULL OR la.disbursement_date::date <= w.wo_date))
@@ -428,6 +460,7 @@ il_loans AS (
     LEFT JOIN il_prod_class ipc ON ipc.product_id = la.product_id::text
     LEFT JOIN il_extra      ex  ON ex.loan_id     = la.loan_id
     LEFT JOIN il_pos_eom    pe  ON pe.loan_id     = la.loan_id
+    LEFT JOIN il_disb_eom   de  ON de.loan_id     = la.loan_id
     LEFT JOIN wo_master w ON w.loan_id = la.loan_id
     WHERE la.loan_id >= 10000000                 -- drop junk/test ids (e.g. 1111111)
       AND la.status <> 'R'
@@ -472,6 +505,11 @@ jlg_loans AS (
              ELSE coalesce(d.dpd, 0) END                        AS eom_dpd,
         CASE WHEN la.status IN ('D','I') AND coalesce(la.dpd,0) = 0 THEN 0
              ELSE coalesce(p.pre_dpd, 0) END                    AS pre_dpd,
+        -- OD amount = PRINCIPAL + INTEREST arrear. This is the full amount the
+        -- borrower owes and is the intended measure — do not reduce it to
+        -- principal. It makes OD-to-Disb exceed 100% on deeply delinquent loans
+        -- (JLG 360+ = 101.79%), which is correct: a loan that has repaid nothing
+        -- for years owes more than was lent. See _metrics in backend/api/ageing.py.
         coalesce(la.principal_arrear, 0) + coalesce(la.interest_arrear, 0) AS total_arrear,
         CASE WHEN la.status = 'W' OR (w.loan_id IS NOT NULL
                   AND (w.wo_date IS NULL OR la.disbursement_date::date <= w.wo_date))
@@ -570,18 +608,25 @@ bucketed AS (
             WHEN al.dpd BETWEEN 181 AND 360         THEN '181 - 360'
             ELSE                                         '360 +'
         END AS curr_dpd_bucket,
+        -- Movement is measured MONTH-END -> LIVE, the same period as
+        -- prev_dpd_bucket -> curr_dpd_bucket above and as rpt_od_slippage.
+        -- These two columns previously compared eom_dpd vs pre_dpd, i.e. the
+        -- PREVIOUS month's movement (Jun-end -> Jul-end) while the matrix showed
+        -- Jul-end -> today. The OD Status KPI reads od_movement_status and its
+        -- own matrix reads the buckets, so the same page disagreed with itself:
+        -- 317 vs 3,082 slippage on 2026-08-07. Same rule, shifted one period.
         CASE
-            WHEN al.raw_status = 'W'                     THEN 'Write-Off'
-            WHEN al.eom_dpd = 0 AND al.pre_dpd = 0      THEN 'Not OD'
-            WHEN al.eom_dpd > 0 AND al.pre_dpd = 0      THEN 'OD Slippage'
-            WHEN al.eom_dpd = 0 AND al.pre_dpd > 0      THEN 'Regularised'
-            ELSE                                              'Continuing'
+            WHEN al.raw_status = 'W'                          THEN 'Write-Off'
+            WHEN al.eom_dpd = 0 AND coalesce(al.dpd,0) = 0    THEN 'Not OD'
+            WHEN al.eom_dpd = 0 AND coalesce(al.dpd,0) > 0    THEN 'OD Slippage'
+            WHEN al.eom_dpd > 0 AND coalesce(al.dpd,0) = 0    THEN 'Regularised'
+            ELSE                                                   'Continuing'
         END AS od_movement_status,
         CASE
-            WHEN al.raw_status = 'W'                     THEN 'N/A'
-            WHEN al.eom_dpd = al.pre_dpd                THEN 'Static'
-            WHEN al.eom_dpd < al.pre_dpd                THEN 'Improved'
-            ELSE                                              'Worsened'
+            WHEN al.raw_status = 'W'                          THEN 'N/A'
+            WHEN coalesce(al.dpd,0) = al.eom_dpd              THEN 'Static'
+            WHEN coalesce(al.dpd,0) < al.eom_dpd              THEN 'Improved'
+            ELSE                                                   'Worsened'
         END AS bucket_movement,
         CASE WHEN al.dpd >= 1                       THEN al.pos ELSE 0 END AS par0_pos,
         CASE WHEN al.dpd > 30                       THEN al.pos ELSE 0 END AS par30_pos,

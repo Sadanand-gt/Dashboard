@@ -54,9 +54,11 @@ interface FormState {
   is_active: boolean
   all_reports: boolean
   reports: string[]
+  can_export: boolean
 }
 const EMPTY_FORM: FormState = {
   username: '', role: 'officer', is_active: true, all_reports: true, reports: [],
+  can_export: false,
 }
 
 function errorDetail(error: unknown, fallback: string): string {
@@ -100,6 +102,7 @@ export function UserManagement() {
     setForm({
       username: user.username, role: user.role, is_active: user.is_active,
       all_reports: allowed.includes('*'), reports: allowed.includes('*') ? [] : allowed,
+      can_export: !!user.can_export,
     })
     setError(''); setMode('edit')
   }
@@ -112,9 +115,18 @@ export function UserManagement() {
     }
     const reports = form.all_reports ? [] : form.reports
     if (mode === 'create') {
-      createMutation.mutate({ username: form.username.trim(), role: form.role, reports })
+      createMutation.mutate({
+        username: form.username.trim(), role: form.role, reports,
+        can_export: form.can_export,
+      })
     } else if (selected) {
-      updateMutation.mutate({ id: selected.id, body: { role: form.role, is_active: form.is_active, reports } })
+      updateMutation.mutate({
+        id: selected.id,
+        body: {
+          role: form.role, is_active: form.is_active, reports,
+          can_export: form.can_export,
+        },
+      })
     }
   }
   const toggleReport = (key: string) => setForm((previous) => ({
@@ -154,11 +166,12 @@ export function UserManagement() {
           <TableHead><TableRow>
             <TableCell>Name</TableCell><TableCell>Username</TableCell><TableCell>MIS Role</TableCell>
             <TableCell>Sathi Hierarchy</TableCell><TableCell>Reports</TableCell>
-            <TableCell>Status</TableCell><TableCell>Last Login</TableCell><TableCell align="right">Actions</TableCell>
+            <TableCell>CSV Export</TableCell><TableCell>Status</TableCell>
+            <TableCell>Last Login</TableCell><TableCell align="right">Actions</TableCell>
           </TableRow></TableHead>
           <TableBody>
             {isLoading ? (
-              <TableRow><TableCell colSpan={8}>Loading users…</TableCell></TableRow>
+              <TableRow><TableCell colSpan={9}>Loading users…</TableCell></TableRow>
             ) : users.map((user) => (
               <TableRow key={user.id} sx={{ opacity: user.is_active ? 1 : 0.5 }}>
                 <TableCell sx={{ fontWeight: 600 }}>{user.full_name}</TableCell>
@@ -168,6 +181,7 @@ export function UserManagement() {
                 <TableCell sx={{ fontSize: '0.75rem' }}>
                   {(user.allowed_reports ?? ['*']).includes('*') ? 'All reports' : `${user.allowed_reports?.length ?? 0} reports`}
                 </TableCell>
+                <TableCell><Chip label={user.can_export ? 'Allowed' : 'Off'} size="small" color={user.can_export ? 'success' : 'default'} /></TableCell>
                 <TableCell><Chip label={user.is_active ? 'Active' : 'Inactive'} size="small" color={user.is_active ? 'success' : 'default'} /></TableCell>
                 <TableCell sx={{ fontSize: '0.75rem' }}>{user.last_login ? new Date(user.last_login).toLocaleString('en-IN') : 'Never'}</TableCell>
                 <TableCell align="right">
@@ -208,6 +222,25 @@ export function UserManagement() {
           <Box className="flex items-center justify-between">
             <Box><Box sx={{ fontWeight: 700 }}>Report Visibility</Box><Box className="text-xs text-text-muted">Choose the reports available in this application.</Box></Box>
             <FormControlLabel control={<Switch checked={form.all_reports || form.role === 'admin'} disabled={form.role === 'admin'} onChange={(e) => setForm((p) => ({ ...p, all_reports: e.target.checked }))} />} label="All reports" />
+          </Box>
+          <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+                     mt: 1.5, pt: 1.5, borderTop: '1px solid #E2E8F0' }}>
+            <Box>
+              <Box sx={{ fontSize: '0.8rem', fontWeight: 700, color: '#0F172A' }}>CSV export</Box>
+              <Box sx={{ fontSize: '0.72rem', color: '#64748B' }}>
+                Off by default. Once granted, this user can download report data as a file.
+              </Box>
+            </Box>
+            <FormControlLabel
+              control={
+                <Switch
+                  size="small"
+                  checked={form.can_export}
+                  onChange={(e) => setForm((p) => ({ ...p, can_export: e.target.checked }))}
+                />
+              }
+              label={<Box sx={{ fontSize: '0.78rem' }}>Allow export</Box>}
+            />
           </Box>
           {!form.all_reports && form.role !== 'admin' && (
             <Box className="grid grid-cols-2 md:grid-cols-3" sx={{ mt: 1 }}>

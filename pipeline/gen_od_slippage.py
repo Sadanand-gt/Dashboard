@@ -101,12 +101,28 @@ il_cand AS (
       -- disbursals cannot have slipped from a month-end they did not exist at).
       AND la.loan_id >= 10000000
       AND la.disbursement_date::date <= (date_trunc('month', current_date) - interval '1 day')::date
-      AND (la.closure_date IS NULL OR la.closure_date::date > current_date - 1 OR la.status = 'W')
-      -- Excl. W/O basis: this report must equal the OD Status matrix "OD Slippage"
-      -- column (and the Excel OD Slippage sheet), both of which drop write-offs.
-      -- Uses the write-off MASTER, not just core status='W'.
-      AND NOT (la.status = 'W' OR (w.loan_id IS NOT NULL
-               AND (w.wo_date IS NULL OR la.disbursement_date::date <= w.wo_date)))
+      AND (
+           -- LIVE book, open as of T-1.
+           (la.closure_date IS NULL OR la.closure_date::date > current_date - 1 OR la.status = 'W')
+        OR
+           -- MOVEMENT arm: on-book at prev month-end, closed during the current
+           -- month. aum_status gained this arm so OD Status / Bucket Movement
+           -- reconcile to the M-1 portfolio; this query kept only the live arm
+           -- and so drifted one loan below the matrix it claims to equal.
+           -- Its assumption that closures "carry POS=0, live DPD=0" does not
+           -- always hold: IL 10015044 is a status='I' death case closed on
+           -- 2026-08-20 still carrying POS 21,921 and arrears 5,490 at DPD 16.
+           -- It slipped from Regular at 31-Jul and rpt_collection_loans flags it
+           -- ftod_flag=1, so every other report counts it. Dropping it here is
+           -- what made this page read 2,023 against 2,024 everywhere else.
+           (la.closure_date::date >  (date_trunc('month', current_date) - interval '1 day')::date
+            AND la.closure_date::date <= current_date - 1)
+      )
+      -- Write-offs are NO LONGER excluded here. They are emitted with
+      -- in_od_matrix = FALSE instead, so this table is the single source for
+      -- both "every loan that slipped" and "the OD Status matrix column".
+      -- EVERY consumer must filter in_od_matrix IS TRUE to keep matching the
+      -- matrix and the Excel OD Slippage sheet, which both drop write-offs.
 ),
 il_due AS (
     SELECT rs.loan_id,
@@ -137,15 +153,20 @@ jlg_cand AS (
     LEFT JOIN wo_master w ON w.loan_id = la.loan_id
     WHERE la.status IN ('A','D','I','W') AND coalesce(la.dpd,0) > 0
       AND (la.status <> 'W' OR la.prin_os > 0)
-      -- Universe aligned with aum_status (see il_base above).
+      -- Universe aligned with aum_status (see il_base above) — INCLUDING the
+      -- current-month closure arm, so this page equals the OD Status matrix.
       AND la.loan_id >= 10000000
       AND la.disbursement_date::date <= (date_trunc('month', current_date) - interval '1 day')::date
-      AND (la.closure_date IS NULL OR la.closure_date::date > current_date - 1 OR la.status = 'W')
-      -- Excl. W/O basis: this report must equal the OD Status matrix "OD Slippage"
-      -- column (and the Excel OD Slippage sheet), both of which drop write-offs.
-      -- Uses the write-off MASTER, not just core status='W'.
-      AND NOT (la.status = 'W' OR (w.loan_id IS NOT NULL
-               AND (w.wo_date IS NULL OR la.disbursement_date::date <= w.wo_date)))
+      AND (
+           (la.closure_date IS NULL OR la.closure_date::date > current_date - 1 OR la.status = 'W')
+        OR (la.closure_date::date >  (date_trunc('month', current_date) - interval '1 day')::date
+            AND la.closure_date::date <= current_date - 1)
+      )
+      -- Write-offs are NO LONGER excluded here. They are emitted with
+      -- in_od_matrix = FALSE instead, so this table is the single source for
+      -- both "every loan that slipped" and "the OD Status matrix column".
+      -- EVERY consumer must filter in_od_matrix IS TRUE to keep matching the
+      -- matrix and the Excel OD Slippage sheet, which both drop write-offs.
       AND NOT EXISTS (
           SELECT 1 FROM public.loan_account_il il
           WHERE il.loan_id = la.loan_id AND il.status IN ('A','D','I','W')
@@ -197,6 +218,11 @@ SELECT
     c.loan_id,
     CASE c.raw_status WHEN 'A' THEN 'Active' WHEN 'D' THEN 'Death' WHEN 'I' THEN 'Death'
          WHEN 'W' THEN 'Write-off' ELSE c.raw_status END AS loan_status,
+    -- TRUE = counts toward the OD Status matrix "OD Slippage" column and the
+    -- Excel sheet (both drop write-offs). FALSE = slipped this month but has
+    -- since been written off; carried so the page can show the total and the
+    -- excluded split from ONE source instead of reading a second table.
+    (c.raw_status <> 'W')                            AS in_od_matrix,
     c.prev_slippage_count,
     round(c.pos::numeric, 2)               AS pos
 FROM computed c

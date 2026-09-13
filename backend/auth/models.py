@@ -17,6 +17,7 @@ class UserOut(BaseModel):
     scope_value: Optional[str] = None
     allowed_reports: list[str] = Field(default_factory=lambda: ["*"])
     designation_type: Optional[str] = None
+    can_export: bool = False
     cluster_id: Optional[str] = None
     region_id: Optional[str] = None
     area_id: Optional[str] = None
@@ -35,9 +36,11 @@ class UserCreate(BaseModel):
     username: str
     role: str = "officer"
     reports: Optional[list[str]] = None
+    can_export: bool = False               # CSV export off unless granted
 
 
 class UserUpdate(BaseModel):
     role: Optional[str] = None
     is_active: Optional[bool] = None
     reports: Optional[list[str]] = None
+    can_export: Optional[bool] = None      # None = unchanged

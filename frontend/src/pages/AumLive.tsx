@@ -6,7 +6,7 @@ export function AumLive() {
       title="AUM — DPD Detail"
       endpoint="aum-live"
       portfolio
-      note="Live days-past-due read straight from core banking · With / Excl write-off toggle"
+      note="Live days-past-due, read straight from core banking"
       kpis={[
         { field: 'total_pos',   label: 'Total POS', fmt: 'inr' },
         { field: 'total_loans', label: '# Loans',   fmt: 'num' },
@@ -20,10 +20,14 @@ export function AumLive() {
       columns={[
         { field: 'total_pos',   label: 'POS',     fmt: 'inr' },
         { field: 'total_loans', label: '# Loans', fmt: 'num' },
-        { field: 'par0_pct',    label: 'PAR 0+',  fmt: 'pct', risk: true },
-        { field: 'par30_pct',   label: 'PAR 30+', fmt: 'pct', risk: true },
-        { field: 'par60_pct',   label: 'PAR 60+', fmt: 'pct', risk: true },
-        { field: 'par90_pct',   label: 'PAR 90+', fmt: 'pct', risk: true },
+        { field: 'par0_pct',    label: 'PAR 0+',  fmt: 'pct', risk: true,
+            base: { field: 'total_pos' } },
+        { field: 'par30_pct',   label: 'PAR 30+', fmt: 'pct', risk: true,
+            base: { field: 'total_pos' } },
+        { field: 'par60_pct',   label: 'PAR 60+', fmt: 'pct', risk: true,
+            base: { field: 'total_pos' } },
+        { field: 'par90_pct',   label: 'PAR 90+', fmt: 'pct', risk: true,
+            base: { field: 'total_pos' } },
         { field: 'death_cases', label: 'Death',   fmt: 'num' },
       ]}
     />

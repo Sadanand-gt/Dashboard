@@ -2,6 +2,7 @@ import { useState, useMemo } from 'react'
 import { useQuery } from '@tanstack/react-query'
 import { useSlicerParams } from '../store/filterStore'
 import Box from '@mui/material/Box'
+import Button from '@mui/material/Button'
 import Paper from '@mui/material/Paper'
 import ToggleButton from '@mui/material/ToggleButton'
 import ToggleButtonGroup from '@mui/material/ToggleButtonGroup'
@@ -127,10 +128,12 @@ const TIME_SLABS = [
 // ── Component ─────────────────────────────────────────────────────────────────
 export function TrendMonthly() {
   const [freq,     setFreq]     = useState<Freq>('M')
+  // Charts are opt-in and start hidden, matching every other page.
+  const [showCharts, setShowCharts] = useState(false)
   const [timeSlab, setTimeSlab] = useState('12M')
   // /api/trend/monthly already accepted portfolio; the page just never sent it,
   // so this view was pinned to "With W/O" while every trend SECTION offered both.
-  const [portfolio, setPortfolio] = useState<'with' | 'excl'>('with')
+  const [portfolio, setPortfolio] = useState<'with' | 'excl'>('excl')  // default Excl. W/O — the active portfolio, consistent across every page
   const slicer = useSlicerParams()
 
   // Full-history monthly series from rpt_trend_full — the same engine behind
@@ -280,21 +283,32 @@ export function TrendMonthly() {
 }
 
 function TrendPanel({ title, children }: { title: string; children: React.ReactNode }) {
+  // Each panel opens closed. Charts are opt-in across the whole dashboard, so a
+  // page costs one screen rather than several.
+  const [show, setShow] = useState(false)
   return (
     <Paper>
       <Box
         sx={{
           px: 2.5, py: 1.75, borderBottom: '1px solid rgba(0,0,0,0.06)',
           fontWeight: 700, fontSize: '0.85rem', color: '#1E293B', background: '#FAFBFF',
+          display: 'flex', alignItems: 'center', gap: 1,
         }}
       >
         {title}
+        <Box sx={{ flex: 1 }} />
+        <Button size="small" variant="outlined" onClick={() => setShow((v) => !v)}
+          sx={{ fontSize: '0.68rem', textTransform: 'none', py: 0.2, px: 1.2, whiteSpace: 'nowrap' }}>
+          {show ? 'Hide chart' : 'Show chart'}
+        </Button>
       </Box>
+      {show && (
       <Box sx={{ height: 280, p: 2 }}>
         <ResponsiveContainer width="100%" height="100%">
           {children as React.ReactElement}
         </ResponsiveContainer>
       </Box>
+      )}
     </Paper>
   )
 }

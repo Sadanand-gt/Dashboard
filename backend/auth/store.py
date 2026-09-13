@@ -25,6 +25,7 @@ class MisStoreError(RuntimeError):
 
 
 REQUIRED_TABLES = {"mis_users", "mis_user_reports", "mis_sessions", "mis_login_audit"}
+REQUIRED_USER_COLUMNS = {"can_export"}
 
 
 @contextmanager
@@ -67,12 +68,22 @@ def verify_schema() -> None:
                 (MIS_PG_SCHEMA, list(REQUIRED_TABLES)),
             )
             found = {row["table_name"] for row in cur.fetchall()}
+            cur.execute(
+                "SELECT column_name FROM information_schema.columns "
+                "WHERE table_schema=%s AND table_name='mis_users'",
+                (MIS_PG_SCHEMA,),
+            )
+            user_columns = {row["column_name"] for row in cur.fetchall()}
     except psycopg2.Error as exc:
         raise MisStoreError("Unable to verify MIS authorization schema") from exc
     missing = REQUIRED_TABLES - found
     if missing:
         raise MisStoreError(
             "MIS authorization schema is missing. Apply backend/auth/schema.sql first."
+        )
+    if REQUIRED_USER_COLUMNS - user_columns:
+        raise MisStoreError(
+            "MIS authorization schema is outdated. Apply backend/auth/schema.sql first."
         )
 
 
@@ -126,13 +137,19 @@ def _save_reports(cur, user_id: int, reports: list[str]) -> None:
         )
 
 
-def create_user(username: str, full_name: str, role: str, reports: list[str]) -> dict:
+def create_user(
+    username: str,
+    full_name: str,
+    role: str,
+    reports: list[str],
+    can_export: bool = False,
+) -> dict:
     try:
         with mis_conn() as conn, conn.cursor() as cur:
             cur.execute(
-                sql.SQL("""INSERT INTO {} (username, full_name, role)
-                            VALUES (lower(%s),%s,%s) RETURNING *""").format(_table("mis_users")),
-                (username.strip(), full_name, role),
+                sql.SQL("""INSERT INTO {} (username, full_name, role, can_export)
+                            VALUES (lower(%s),%s,%s,%s) RETURNING *""").format(_table("mis_users")),
+                (username.strip(), full_name, role, can_export),
             )
             row = cur.fetchone()
             _save_reports(cur, row["id"], reports)
@@ -145,7 +162,7 @@ def create_user(username: str, full_name: str, role: str, reports: list[str]) ->
 
 
 def update_user(user_id: int, updates: dict, reports: list[str] | None) -> dict | None:
-    allowed = {"role", "is_active", "full_name"}
+    allowed = {"role", "is_active", "full_name", "can_export"}
     clean = {key: value for key, value in updates.items() if key in allowed}
     with mis_conn() as conn, conn.cursor() as cur:
         if clean:

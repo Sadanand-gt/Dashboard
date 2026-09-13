@@ -1,0 +1,22 @@
+{
+  "artboards": [
+    { "file": "Main.dc.html",      "x": 0,    "y": 0,    "w": 1280, "h": 1180, "title": "Formatting system" },
+    { "file": "Current.dc.html",   "x": 1400, "y": 0,    "w": 1280, "h": 900,  "title": "Baseline — today" },
+    { "file": "Signal.dc.html",    "x": 0,    "y": 1300, "w": 1280, "h": 1000, "title": "Option A — Signal-led" },
+    { "file": "Dense.dc.html",     "x": 1400, "y": 1300, "w": 1280, "h": 1060, "title": "Option B — Dense data-first" },
+    { "file": "Editorial.dc.html", "x": 2800, "y": 1300, "w": 1280, "h": 1120, "title": "Option C — Editorial" }
+  ],
+  "annotations": [
+    { "id": "start-here", "x": 0, "y": -150, "w": 620,
+      "text": "START HERE — the shading rules.\n\nEvery option below uses this same system, so settle these rules first: the benchmark, the five bands, and which columns get a direction at all.\n\nThe layout choice is separate, and it is the row of three below." },
+    { "id": "baseline-note", "x": 1400, "y": -150, "w": 560,
+      "text": "This is what the page renders today, with the benchmark-relative shading already in.\n\nKept honest for comparison — the three options below are measured against this, not against the old absolute-cutoff version." },
+    { "id": "pick-one", "x": 0, "y": 1160, "w": 700,
+      "text": "PICK A DIRECTION — these differ on WHO the page is for, not on decoration.\n\nA · the manager scanning for exceptions   ·   B · the analyst working the whole table   ·   C · the reader at a distance\n\nEach names its own trade-off underneath. Mixing is fine — e.g. A's KPI cards with B's grouped headers." },
+    { "id": "chosen-a", "x": 0, "y": 2340, "w": 640,
+      "text": "CHOSEN — shipped in StandardReport.tsx, so all five report pages pick it up at once.\n\nBuilt as drawn: severity spine, magnitude bar in grey, fill on the primary column only, exception count in the bar, benchmark named in the legend.\n\nONE DEVIATION: the KPI sparkline and vs-last-month delta are not built. /summary carries no prior-period figure, and rather than invent a mapping to trend measures the cards show a comparison that IS derivable — how many groups sit worse than the benchmark. Say the word and I will wire the real 12-month series." },
+    { "id": "size-caveat", "x": 700, "y": 2340, "w": 560,
+      "text": "WORTH KNOWING — the spine and fill always hang on a RATE, never a count.\n\nA count is confounded by group size: a large branch rejects more loans and slips more accounts simply for being large, so shading it against a median punishes it for its size.\n\nThe shaded COUNT columns (fresh slippage, not-paid, no-pay, rejections) still carry colour and weight but never a fill — read them with that caveat in mind." }
+  ],
+  "launch": { "view": "canvas" }
+}
