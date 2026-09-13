@@ -2,5 +2,5 @@
 # Cron reads the repository .env because pipeline modules load it themselves.
 SHELL=/bin/bash
 PATH=/opt/dashboard/.venv/bin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
-# EC2 runs UTC: 01:00 UTC is 06:30 IST. flock prevents overlapping runs.
-0 1 * * * dashboard /usr/bin/flock -n /opt/dashboard/logs/pipeline.lock /bin/bash -lc 'cd /opt/dashboard && /opt/dashboard/.venv/bin/python -m pipeline.daily_run' >> /opt/dashboard/logs/pipeline-cron.log 2>&1
+# EC2 runs UTC: 00:30 UTC is 06:00 IST. flock prevents overlapping runs.
+30 0 * * * dashboard /usr/bin/flock -n /opt/dashboard/logs/pipeline.lock /bin/bash -lc 'cd /opt/dashboard && /opt/dashboard/.venv/bin/python -m pipeline.daily_run' >> /opt/dashboard/logs/pipeline-cron.log 2>&1

@@ -1,15 +1,15 @@
 # ─────────────────────────────────────────────────────────────────────────────
-# ananya-pipeline.timer — fires the daily run at 06:30 IST.
+# ananya-pipeline.timer — fires the daily run at 06:00 IST.
 #
 # Persistent=true is the whole point of moving off the laptop: if the server was
-# down at 06:30, the run happens as soon as it is back, instead of being skipped
+# down at 06:00, the run happens as soon as it is back, instead of being skipped
 # silently until someone notices the dashboard is stale.
 # ─────────────────────────────────────────────────────────────────────────────
 [Unit]
-Description=Ananya MIS daily pipeline (06:30 IST)
+Description=Ananya MIS daily pipeline (06:00 IST)
 
 [Timer]
-OnCalendar=*-*-* 06:30:00 Asia/Kolkata
+OnCalendar=*-*-* 06:00:00 Asia/Kolkata
 Persistent=true
 # The source replica is shared. A fixed second means every environment hits it
 # at the same instant; a small jitter costs nothing and avoids that.

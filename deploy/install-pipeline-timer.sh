@@ -4,7 +4,7 @@
 #
 # Replaces the Windows Task Scheduler job on the laptop, which could not work
 # unattended: LogonType=Interactive (no logged-in session, no run), WakeToRun
-# false (asleep at 06:30 = no run), StartWhenAvailable making it fire whenever
+# false (asleep at 06:00 = no run), StartWhenAvailable making it fire whenever
 # the lid next opened, and task history logging disabled so none of it showed.
 #
 # RUN AS ROOT on the target server, from a checkout of this repo:

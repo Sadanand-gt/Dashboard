@@ -6,7 +6,7 @@
 # WHY A SERVER AND NOT THE LAPTOP
 #   The Windows Task Scheduler job on AFIG-LPT-000127 could never work
 #   unattended: its principal is LogonType=Interactive (no logged-in session,
-#   no run), WakeToRun is false (asleep at 06:30 = no run), and with
+#   no run), WakeToRun is false (asleep at 06:00 = no run), and with
 #   StartWhenAvailable it fired whenever the lid next opened — 10:02, 09:47,
 #   21:38 on the days it ran at all. Task history logging was also off, so
 #   none of that was visible.

@@ -46,7 +46,7 @@ sudo bash deploy/install-pipeline-timer.sh
 ```
 
 Creates the `ananya` service account, `/opt/ananya_mis`, a venv, logrotate, and
-a systemd timer firing at **06:30 IST** with `Persistent=true` — a run missed
+a systemd timer firing at **06:00 IST** with `Persistent=true` — a run missed
 because the box was down happens on next boot instead of being skipped in
 silence, which is precisely how the laptop job kept failing unnoticed.
 
@@ -96,7 +96,7 @@ For the record, since it was registered and enabled and still never ran properly
 | setting | value | consequence |
 |---|---|---|
 | `Principal.LogonType` | `Interactive` | runs only while that user is logged in |
-| `WakeToRun` | `False` | asleep at 06:30 → no run |
+| `WakeToRun` | `False` | asleep at 06:00 → no run |
 | `StartWhenAvailable` | `True` | fired whenever the lid next opened — 10:02, 09:47, 21:38 |
 | `RestartCount` | `0` | a failed night stayed failed |
 | task history log | **disabled** | no record of whether it ran at all |
